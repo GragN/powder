@@ -25,7 +25,7 @@ public static class WorldFile
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temp = full + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(5, world.Width, world.Height,
+        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(6, world.Width, world.Height,
             world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture(), bubbles), Options));
         File.Move(temp, full, true);
     }
@@ -35,7 +35,7 @@ public static class WorldFile
         if (new FileInfo(path).Length > 64 * 1024 * 1024) throw new InvalidDataException("Scene is too large.");
         var s = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(path), Options)
             ?? throw new InvalidDataException("Empty scene.");
-        if (s.Version is not (1 or 2 or 3 or 4 or 5) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
+        if (s.Version is not (1 or 2 or 3 or 4 or 5 or 6) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
             throw new InvalidDataException("Unsupported scene version or dimensions.");
         var world = new World(s.Width, s.Height) { AtmosphereEnabled = s.Cooling };
         var occupied = new HashSet<int>();
@@ -76,6 +76,7 @@ public static class WorldFile
         }
         world.RebuildBubbleIndices();
         world.Air.UpdateObstacles(world);
+        if (s.Version >= 6 && s.Air?.PocketHeat is null) throw new InvalidDataException("Missing boundary-air data.");
         if (s.Air is not null) world.Air.Restore(s.Air);
         else if (s.Version >= 2) throw new InvalidDataException("Missing atmosphere data.");
         if (s.Liquids is not null) world.Liquids.Restore(world, s.Liquids);

@@ -68,9 +68,9 @@ public sealed partial class AirField
     }
 
     public sealed record State(int Width, int Height, double AmbientTemperature,
-        double[] Heat, double[] U, double[] V, double BoundaryHeat);
+        double[] Heat, double[] U, double[] V, double BoundaryHeat, double[]? PocketHeat = null);
     public State Capture() => new(Width, Height, AmbientTemperature, (double[])Heat.Clone(),
-        (double[])U.Clone(), (double[])V.Clone(), BoundaryHeat);
+        (double[])U.Clone(), (double[])V.Clone(), BoundaryHeat, (double[])PocketHeat.Clone());
     public void Restore(State state)
     {
         if (state.Width != Width || state.Height != Height || !double.IsFinite(state.AmbientTemperature)
@@ -78,10 +78,17 @@ public sealed partial class AirField
             || state.Heat.Length != Heat.Length || state.U.Length != U.Length || state.V.Length != V.Length
             || state.Heat.Any(h => !double.IsFinite(h) || Math.Abs(h) > Capacity * 100_000)
             || state.U.Any(v => !double.IsFinite(v) || Math.Abs(v) > 100)
-            || state.V.Any(v => !double.IsFinite(v) || Math.Abs(v) > 100) || !double.IsFinite(state.BoundaryHeat))
+            || state.V.Any(v => !double.IsFinite(v) || Math.Abs(v) > 100) || !double.IsFinite(state.BoundaryHeat)
+            || state.PocketHeat is not null && (state.PocketHeat.Length != PocketHeat.Length
+                || state.PocketHeat.Any(h => !double.IsFinite(h) || Math.Abs(h) > PocketCapacity * 100_000)))
             throw new InvalidDataException("Invalid atmosphere data.");
         AmbientTemperature = state.AmbientTemperature; BoundaryHeat = state.BoundaryHeat;
         state.Heat.CopyTo(Heat, 0); state.U.CopyTo(U, 0); state.V.CopyTo(V, 0);
+        if (state.PocketHeat is not null) state.PocketHeat.CopyTo(PocketHeat, 0);
+        else Array.Clear(PocketHeat); // older scenes did not resolve boundary gas
+        trappedPocketHeat = false;
+        for (int i = 0; i < PocketHeat.Length; i++)
+            if (PocketHeat[i] != 0 && !pocketAir[i]) { trappedPocketHeat = true; break; }
         Array.Clear(pressure);
         ZeroClosedFaces();
     }

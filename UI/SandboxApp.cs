@@ -59,7 +59,7 @@ public sealed class SandboxApp
             SetTraceLogLevel(TraceLogLevel.Warning);
             InitWindow(WindowWidth, WindowHeight, "Powder Lab | Particle sandbox");
             initialized = true;
-            SetExitKey(KeyboardKey.Null);
+            SetExitKey(KeyboardKey.Escape);
             SetTargetFPS(60);
             string fontPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DejaVuSans.ttf");
             font = LoadFontEx(fontPath, 32, null, 0);
@@ -157,7 +157,6 @@ public sealed class SandboxApp
     private void Input()
     {
         if (IsKeyPressed(KeyboardKey.F1)) help = !help;
-        if (IsKeyPressed(KeyboardKey.Escape)) { help = false; pendingAction = null; }
         if (pendingAction is not null)
         {
             if (IsKeyPressed(KeyboardKey.Enter)) ConfirmAction();
@@ -512,7 +511,7 @@ public sealed class SandboxApp
             "Space: pause     N: single step     T: temperature     A: flow",
             "Ctrl+S: save scene     Ctrl+O: load scene",
             "C: clear canvas     R: load demo     I: material properties",
-            "F1 or Esc: close this guide"];
+            "F1: close this guide     Esc: quit the game"];
         for (int i = 0; i < lines.Length; i++) Text(lines[i], 367, 274 + i * 31, 13, Ink);
         Wrapped("Try heating water, melting ice, dropping sand into a liquid, or igniting wood. Hover over matter to inspect its mass and temperature.",
             367, 510, 540, 14, Muted);

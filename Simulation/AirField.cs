@@ -18,7 +18,7 @@ public sealed partial class AirField
     public double[] V { get; }    // vertical face velocity, positive down, m/s
     public bool[] Blocked { get; }
     public double BoundaryHeat { get; private set; } // net outward heat, J; cold outflow can be negative
-    public double ExcessEnergy => Heat.Sum();
+    public double ExcessEnergy => Heat.Sum() + PocketHeat.Sum();
     public double DivergenceRms { get; private set; }
     public bool Active { get; private set; }
     private readonly int fineWidth, fineHeight;
@@ -40,6 +40,8 @@ public sealed partial class AirField
         uWork = new double[U.Length]; vWork = new double[V.Length]; delta = new double[Heat.Length];
         pressure = new double[Heat.Length]; pressureEquation = new GridEquation(Heat.Length) { Stride = Width };
         openU = new bool[U.Length]; openV = new bool[V.Length];
+        PocketHeat = new double[fineWidth * fineHeight];
+        pocketAir = new bool[PocketHeat.Length];
         // The last coarse row/column may have fewer than Scale fine cells. These exact
         // inverse boundaries match IndexAtFine, including non-multiple dimensions.
         fineColumns = new int[Width + 1]; fineRows = new int[Height + 1];
@@ -51,7 +53,12 @@ public sealed partial class AirField
     public int IndexAtFine(int x, int y) => Math.Clamp(y * Height / fineHeight, 0, Height - 1) * Width
         + Math.Clamp(x * Width / fineWidth, 0, Width - 1);
     public double Temperature(int index) => AmbientTemperature + Heat[index] / Capacity;
-    public double TemperatureAtFine(int x, int y) => Temperature(IndexAtFine(x, y));
+    public double TemperatureAtFine(int x, int y)
+    {
+        x = Math.Clamp(x, 0, fineWidth - 1); y = Math.Clamp(y, 0, fineHeight - 1);
+        int i = y * fineWidth + x;
+        return pocketAir[i] ? AmbientTemperature + PocketHeat[i] / PocketCapacity : Temperature(IndexAtFine(x, y));
+    }
     public void SetTemperature(int x, int y, double temperature)
     {
         if (x < 0 || y < 0 || x >= Width || y >= Height || !double.IsFinite(temperature) || temperature < -273.15)
@@ -62,6 +69,8 @@ public sealed partial class AirField
     {
         foreach (var a in new[] { Heat, U, V, pressure }) Array.Clear(a);
         Array.Clear(Blocked); obstacleCount = 0; BoundaryHeat = 0; DivergenceRms = 0;
+        Array.Clear(PocketHeat); Array.Clear(pocketAir); pocketIndices.Clear(); nextPocketIndices.Clear();
+        pocketContacts.Clear(); pocketSeconds = -1; trappedPocketHeat = reversePocketSweep = false;
         RebuildGeometry();
     }
 
@@ -113,22 +122,7 @@ public sealed partial class AirField
                 if (occupied) occupiedCount++;
             }
         obstacleCount = occupiedCount;
-        // Displaced warm/cold air gives its excess heat to adjacent fluid, never to a reset timer.
-        for (int i = 0; i < Heat.Length; i++)
-        {
-            if (!nextBlocked[i] || Heat[i] == 0) continue;
-            int x = i % Width, y = i / Width, count = 0;
-            if (x > 0 && !nextBlocked[i - 1]) count++;
-            if (x + 1 < Width && !nextBlocked[i + 1]) count++;
-            if (y > 0 && !nextBlocked[i - Width]) count++;
-            if (y + 1 < Height && !nextBlocked[i + Width]) count++;
-            if (count == 0) continue; // retain unresolved trapped heat until the pocket reopens
-            double q = Heat[i] / count; Heat[i] = 0;
-            if (x > 0 && !nextBlocked[i - 1]) Heat[i - 1] += q;
-            if (x + 1 < Width && !nextBlocked[i + 1]) Heat[i + 1] += q;
-            if (y > 0 && !nextBlocked[i - Width]) Heat[i - Width] += q;
-            if (y + 1 < Height && !nextBlocked[i + Width]) Heat[i + Width] += q;
-        }
+        UpdatePocketGeometry(world, changed);
         if (!changed)
         {
             // Velocity arrays remain public for loading and tools. A restored or
@@ -176,38 +170,38 @@ public sealed partial class AirField
 
     private void Contact(World world, ref Particle p, int x, int y, int nx, int ny, double seconds)
     {
-        // Surface contact is resolved on the particle grid; narrow passages below the air-grid
-        // resolution are closed, so even a thin material wall cannot leak an air current.
-        for (int distance = 1; distance <= Scale * 2; distance++)
+        // Every gas cell touching a surface has finite thermal capacity, including
+        // the unoccupied part of a coarse block that is closed to resolved flow.
+        int xx = x + nx, yy = y + ny;
+        if (!world.Inside(xx, yy))
         {
-            int xx = x + nx * distance, yy = y + ny * distance;
-            if (!world.Inside(xx, yy))
+            // A face actually on an open edge touches the outside atmosphere.
+            // Interior faces never use an infinite temperature reservoir.
+            if (yy < fineHeight)
             {
-                // A face actually on an open edge touches the outside atmosphere.
-                // Interior faces never use an infinite temperature reservoir.
-                if (distance == 1 && yy < fineHeight)
-                {
-                    double boundaryK = LiquidProperties.Conductivity(p);
-                    double gap = .5 * (nx != 0 ? Dx : Dy);
-                    double boundaryG = World.CellSize * World.Depth / (.5 * World.CellSize / boundaryK + gap / Conductivity);
-                    BoundaryHeat -= Thermodynamics.ExchangeWithReservoir(ref p, AmbientTemperature, boundaryG, seconds);
-                }
-                return;
+                double boundaryK = LiquidProperties.Conductivity(p);
+                double gap = .5 * (nx != 0 ? Dx : Dy);
+                double boundaryG = World.CellSize * World.Depth / (.5 * World.CellSize / boundaryK + gap / Conductivity);
+                BoundaryHeat -= Thermodynamics.ExchangeWithReservoir(ref p, AmbientTemperature, boundaryG, seconds);
             }
-            MatterState state = Materials.Get(world.At(xx, yy).Element).State;
-            if (state is MatterState.Solid or MatterState.Powder or MatterState.Liquid) return;
-            int i = IndexAtFine(xx, yy);
-            if (Blocked[i]) continue;
-            double k = LiquidProperties.Conductivity(p);
-            double airDistance = .5 * (nx != 0 ? Dx : Dy);
-            double g = World.CellSize * World.Depth / (.5 * World.CellSize / k + airDistance / Conductivity);
-            var air = new Particle { Element = Element.Air, Mass = Capacity / SpecificHeat,
-                Energy = Capacity * AmbientTemperature + Heat[i] };
-            double before = p.Energy;
-            Thermodynamics.Exchange(ref p, ref air, seconds, g);
-            Heat[i] += before - p.Energy;
             return;
         }
+        MatterState state = Materials.Get(world.At(xx, yy).Element).State;
+        if (state is MatterState.Solid or MatterState.Powder or MatterState.Liquid) return;
+        int i = IndexAtFine(xx, yy);
+        int fine = yy * fineWidth + xx;
+        if (Blocked[i] && !pocketAir[fine]) return;
+        bool pocket = pocketAir[fine];
+        double capacity = pocket ? PocketCapacity : Capacity;
+        double k = LiquidProperties.Conductivity(p);
+        double airDistance = .5 * (pocket ? World.CellSize : nx != 0 ? Dx : Dy);
+        double g = World.CellSize * World.Depth / (.5 * World.CellSize / k + airDistance / Conductivity);
+        var air = new Particle { Element = Element.Air, Mass = capacity / SpecificHeat,
+            Energy = capacity * AmbientTemperature + (pocket ? PocketHeat[fine] : Heat[i]) };
+        double before = p.Energy;
+        Thermodynamics.Exchange(ref p, ref air, seconds, g);
+        if (pocket) PocketHeat[fine] += before - p.Energy;
+        else Heat[i] += before - p.Energy;
     }
 
     public (double X, double Y) Velocity(double x, double y)
@@ -241,12 +235,14 @@ public sealed partial class AirField
 
     public void Step(double seconds)
     {
-        bool active = HasActivity(Heat, 1e-14) || HasActivity(U, 1e-10) || HasActivity(V, 1e-10);
+        bool active = HasActivity(Heat, 1e-14) || HasActivity(U, 1e-10) || HasActivity(V, 1e-10) || PocketsActive();
         Active = active;
         if (!active) { DivergenceRms = 0; return; }
+        TransportPocketHeat(seconds * .5);
         AdvectMomentum(seconds);
         Project(seconds);
         TransportHeat(seconds);
+        TransportPocketHeat(seconds * .5);
     }
 
     private static bool HasActivity(double[] values, double tolerance)
