@@ -5,9 +5,12 @@ namespace Powder;
 public static partial class SelfTests
 {
     private static int passed, failed;
+    private static string? nameFilter;
 
-    public static int Run()
+    public static int Run(string? filter = null)
     {
+        nameFilter = filter; passed = failed = 0;
+        if (filter is not null) Console.WriteLine($"Test filter: {filter}");
         Test("material data uses SI units", () =>
         {
             Check(Materials.Get(Element.Water).SpecificHeat == 4184, "water heat capacity");
@@ -406,7 +409,9 @@ public static partial class SelfTests
         });
         RunAtmosphereTests();
         RunLiquidTests();
+        RunLiquidSolverTests();
         RunVaporizationTests();
+        RunBoilingBehaviorTests();
         Test("full demo remains finite and conserves the mass budget", () =>
         {
             var w = new World(SandboxApp.GridWidth, SandboxApp.GridHeight);
@@ -425,7 +430,7 @@ public static partial class SelfTests
             Console.WriteLine($"  demo: {w.Count:N0} particles, 360 steps in {timer.Elapsed.TotalSeconds:F2}s; air divergence RMS {w.Air.DivergenceRms:F5}/s; liquid {w.Liquids.DivergenceRms:F5}/s");
         });
         Console.WriteLine($"\n{passed} passed, {failed} failed. Headless physics and scene checks completed.");
-        return failed == 0 ? 0 : 1;
+        return failed == 0 && passed > 0 ? 0 : 1;
     }
 
     private static World Tube()
@@ -442,6 +447,7 @@ public static partial class SelfTests
     }
     private static void Test(string name, Action run)
     {
+        if (nameFilter is not null && !name.Contains(nameFilter, StringComparison.OrdinalIgnoreCase)) return;
         try { run(); passed++; Console.WriteLine($"PASS  {name}"); }
         catch (Exception ex) { failed++; Console.Error.WriteLine($"FAIL  {name}: {ex.Message}"); }
     }

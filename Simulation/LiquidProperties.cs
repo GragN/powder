@@ -34,9 +34,10 @@ public static class LiquidProperties
         return 1000 * (1 - (t + 288.9414) / (508929.2 * (t + 68.12963)) * (t - 3.9863) * (t - 3.9863));
     }
 
-    public static double Density(in Particle p)
+    public static double Density(in Particle p) => DensityAt(p, p.Temperature);
+    private static double DensityAt(in Particle p, double t)
     {
-        double t = p.Temperature, reference = ReferenceDensity(p);
+        double reference = ReferenceDensity(p);
         return p.Element switch
         {
             Element.Water => WaterDensity(t) + 750 * p.DissolvedSalt / p.Mass,
@@ -47,9 +48,9 @@ public static class LiquidProperties
         };
     }
 
-    public static double DynamicViscosity(in Particle p)
+    public static double DynamicViscosity(in Particle p) => ViscosityAt(p, p.Temperature);
+    private static double ViscosityAt(in Particle p, double t)
     {
-        double t = p.Temperature;
         double mu = p.Element switch
         {
             // Andrade relation for water: about 1.00 mPa s at 20 C, 0.28 at 100 C.
@@ -67,5 +68,9 @@ public static class LiquidProperties
         return Math.Clamp(mu, 1e-5, 1e9);
     }
 
-    public static double KinematicViscosity(in Particle p) => DynamicViscosity(p) / Density(p);
+    public static double KinematicViscosity(in Particle p)
+    {
+        double temperature = p.Temperature;
+        return ViscosityAt(p, temperature) / DensityAt(p, temperature);
+    }
 }

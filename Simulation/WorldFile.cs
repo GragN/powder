@@ -8,7 +8,7 @@ public static class WorldFile
         double Energy, double Salt, double Velocity, double Travel, float Life, byte Variation,
         double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0);
     private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells,
-        AirField.State? Air = null, LiquidField.State? Liquids = null);
+        AirField.State? Air = null, LiquidField.State? Liquids = null, Cell[]? Bubbles = null);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
 
     public static string DefaultPath => Path.Combine(
@@ -19,11 +19,14 @@ public static class WorldFile
         var cells = world.Cells.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
             p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
             .Where(p => p.Element != Element.Empty).ToArray();
+        var bubbles = world.Bubbles.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
+            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
+            .Where(p => p.Element != Element.Empty).ToArray();
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temp = full + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(4, world.Width, world.Height,
-            world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture()), Options));
+        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(5, world.Width, world.Height,
+            world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture(), bubbles), Options));
         File.Move(temp, full, true);
     }
 
@@ -32,14 +35,18 @@ public static class WorldFile
         if (new FileInfo(path).Length > 64 * 1024 * 1024) throw new InvalidDataException("Scene is too large.");
         var s = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(path), Options)
             ?? throw new InvalidDataException("Empty scene.");
-        if (s.Version is not (1 or 2 or 3 or 4) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
+        if (s.Version is not (1 or 2 or 3 or 4 or 5) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
             throw new InvalidDataException("Unsupported scene version or dimensions.");
         var world = new World(s.Width, s.Height) { AtmosphereEnabled = s.Cooling };
         var occupied = new HashSet<int>();
-        foreach (var c in s.Cells)
+        if (s.Version >= 5 && s.Bubbles is null) throw new InvalidDataException("Missing dispersed-phase data.");
+        for (int layer = 0; layer < 2; layer++)
+        foreach (var c in layer == 0 ? s.Cells : s.Bubbles ?? [])
         {
-            if (c is null || c.Index < 0 || c.Index >= world.Cells.Length || !occupied.Add(c.Index)
+            if (c is null || c.Index < 0 || c.Index >= world.Cells.Length || !occupied.Add(c.Index + layer * world.Cells.Length)
                 || !Enum.IsDefined(c.Element) || c.Element is Element.Empty or Element.Air || !Enum.IsDefined(c.Origin)
+                || layer == 1 && c.Salt != 0
+                || layer == 1 && !(Materials.IsWater(c.Element) || c.Element is Element.Oil or Element.Lava or Element.Vapor || Thermodynamics.CanMelt(c.Element))
                 || c.Element == Element.Lava && !Thermodynamics.CanMelt(c.Origin)
                 || c.Element == Element.Vapor && (s.Version < 4 || !VaporProperties.Supports(c.Origin) || c.Salt != 0)
                 || !double.IsFinite(c.Mass) || c.Mass <= 0 || !double.IsFinite(c.Energy)
@@ -48,7 +55,8 @@ public static class WorldFile
                 || c.Travel <= -1 || c.Travel >= 1 || !float.IsFinite(c.Life) || !double.IsFinite(c.EnthalpyOffset)
                 || !double.IsFinite(c.VelocityX) || !double.IsFinite(c.TravelX) || c.TravelX <= -1 || c.TravelX >= 1)
                 throw new InvalidDataException("Invalid particle data.");
-            world.Cells[c.Index] = new Particle
+            var destination = layer == 0 ? world.Cells : world.Bubbles;
+            destination[c.Index] = new Particle
             {
                 Element = c.Element, MeltOrigin = c.Origin, Mass = c.Mass, Energy = c.Energy,
                 DissolvedSalt = c.Salt, VelocityY = c.Velocity, Travel = c.Travel,
@@ -66,6 +74,7 @@ public static class WorldFile
             // Apply the new phase boundaries to older scenes without inventing vaporization energy.
             if (s.Version < 4) Thermodynamics.ResolvePhase(ref world.Cells[c.Index]);
         }
+        world.RebuildBubbleIndices();
         world.Air.UpdateObstacles(world);
         if (s.Air is not null) world.Air.Restore(s.Air);
         else if (s.Version >= 2) throw new InvalidDataException("Missing atmosphere data.");

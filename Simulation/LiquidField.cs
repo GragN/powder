@@ -1,6 +1,6 @@
 namespace Powder;
 
-// Resolved bulk circulation on the particle grid. The moving, whole-cell free surface
+// Resolved bulk circulation on the particle grid. The moving, mass-fraction free surface
 // is handled by World; its normal velocity is zero during this convection solve.
 // Each immiscible liquid has its own pressure domain. Heat crosses their interfaces
 // by Fourier conduction, not by blending their identities.
@@ -15,8 +15,16 @@ public sealed partial class LiquidField
     private readonly bool[] solid;
     private readonly double[] nu, buoyancy, oldU, oldV, pressure, viscousPressure;
     private readonly double[] dm, de, ds, dr;
-    private readonly GridEquation equation;
+    private readonly double[] propertyEnergy, propertyMass, propertySalt, propertyReference;
+    private readonly double[] rowBuoyancy;
+    private readonly int[] rowStamp;
+    private int propertyTick;
+    private readonly int[] active, facesU, facesV;
+    private int activeCount, faceCountU, faceCountV;
+    private readonly GridEquation equation, pressureEquation;
+    private bool geometryChanged = true, resting;
     private const double Dx = World.CellSize;
+    private const int KindSlots = 272; // byte element id plus the molten-origin offset.
 
     public LiquidField(int width, int height)
     {
@@ -27,13 +35,18 @@ public sealed partial class LiquidField
         tagU = new int[U.Length]; tagV = new int[V.Length];
         kind = new int[n]; solid = new bool[n]; nu = new double[n]; buoyancy = new double[n]; pressure = new double[n]; viscousPressure = new double[n];
         dm = new double[n]; de = new double[n]; ds = new double[n]; dr = new double[n];
+        propertyEnergy = new double[n]; propertyMass = new double[n]; propertySalt = new double[n]; propertyReference = new double[n];
+        rowBuoyancy = new double[height * KindSlots]; rowStamp = new int[rowBuoyancy.Length];
+        active = new int[n]; facesU = new int[U.Length]; facesV = new int[V.Length];
         equation = new GridEquation(Math.Max(U.Length, V.Length));
+        pressureEquation = new GridEquation(n);
     }
 
     public void Reset()
     {
         Array.Clear(U); Array.Clear(V); Array.Clear(tagU); Array.Clear(tagV);
         Array.Clear(kind); Array.Clear(pressure); Array.Clear(viscousPressure); DivergenceRms = 0;
+        activeCount = faceCountU = faceCountV = 0; geometryChanged = true;
     }
 
     private bool Same(int a, int b) => kind[a] != 0 && kind[a] == kind[b];
@@ -41,34 +54,79 @@ public sealed partial class LiquidField
     private int UpdateGeometry(World world)
     {
         int count = 0;
+        bool changed = false;
+        int minimumX = Width, maximumX = -1, minimumY = Height, maximumY = -1, firstKind = 0;
+        bool oneKind = true;
+        resting = true;
         for (int i = 0; i < kind.Length; i++)
         {
             ref readonly var p = ref world.Cells[i];
             int next = LiquidProperties.Kind(p);
-            if (next != kind[i]) pressure[i] = viscousPressure[i] = 0;
+            bool newKind = next != kind[i];
+            if (newKind) { pressure[i] = viscousPressure[i] = 0; changed = true; }
             kind[i] = next;
             var state = Materials.Get(p.Element).State;
             solid[i] = state is MatterState.Solid or MatterState.Powder;
             if (next == 0) continue;
-            count++;
-            nu[i] = LiquidProperties.KinematicViscosity(p);
-            buoyancy[i] = World.Gravity * (LiquidProperties.Density(p) / LiquidProperties.ReferenceDensity(p) - 1);
+            int x = i % Width, y = i / Width;
+            minimumX = Math.Min(minimumX, x); maximumX = Math.Max(maximumX, x);
+            minimumY = Math.Min(minimumY, y); maximumY = Math.Max(maximumY, y);
+            if (firstKind == 0) firstKind = next;
+            else oneKind &= next == firstKind;
+            active[count++] = i;
+            if (newKind || propertyEnergy[i] != p.Energy || propertyMass[i] != p.Mass
+                || propertySalt[i] != p.DissolvedSalt || propertyReference[i] != p.EnthalpyOffset)
+            {
+                propertyEnergy[i] = p.Energy; propertyMass[i] = p.Mass;
+                propertySalt[i] = p.DissolvedSalt; propertyReference[i] = p.EnthalpyOffset;
+                nu[i] = LiquidProperties.KinematicViscosity(p);
+                buoyancy[i] = World.Gravity * (LiquidProperties.Density(p) / LiquidProperties.ReferenceDensity(p) - 1);
+            }
         }
-        for (int y = 0; y < Height; y++)
-        for (int x = 0; x <= Width; x++)
+        activeCount = count;
+        // Aggregation is excellent for large, filled tanks. A moving free surface
+        // can split into disconnected films and islands; use the local IC factor
+        // there so coarse aggregates never tie unrelated pressure null spaces.
+        bool multigrid = oneKind && count >= 16384
+            && count == (maximumX - minimumX + 1) * (maximumY - minimumY + 1);
+        if (pressureEquation.UseMultigrid != multigrid)
+        { pressureEquation.UseMultigrid = multigrid; geometryChanged = true; }
+        if (changed)
         {
-            int f = y * (Width + 1) + x;
-            int tag = x > 0 && x < Width && Same(y * Width + x - 1, y * Width + x) ? kind[y * Width + x] : 0;
-            if (tag == 0 || tag != tagU[f]) U[f] = 0;
-            tagU[f] = tag;
+            faceCountU = faceCountV = 0;
+            for (int y = 0; y < Height; y++)
+            for (int x = 0; x <= Width; x++)
+            {
+                int f = y * (Width + 1) + x;
+                int tag = x > 0 && x < Width && Same(y * Width + x - 1, y * Width + x) ? kind[y * Width + x] : 0;
+                if (tag == 0 || tag != tagU[f]) U[f] = 0;
+                tagU[f] = tag;
+                if (tag != 0) facesU[faceCountU++] = f;
+            }
+            for (int y = 0; y <= Height; y++)
+            for (int x = 0; x < Width; x++)
+            {
+                int f = y * Width + x;
+                int tag = y > 0 && y < Height && Same(f - Width, f) ? kind[f] : 0;
+                if (tag == 0 || tag != tagV[f]) V[f] = 0;
+                tagV[f] = tag;
+                if (tag != 0) facesV[faceCountV++] = f;
+            }
         }
-        for (int y = 0; y <= Height; y++)
-        for (int x = 0; x < Width; x++)
+        geometryChanged |= changed;
+        // Zero velocity and one density per horizontal layer are exactly hydrostatic.
+        // This also covers stable stratification without solving the same resting tank.
+        if (++propertyTick == int.MaxValue) { Array.Clear(rowStamp); propertyTick = 1; }
+        for (int k = 0; k < count; k++)
         {
-            int f = y * Width + x;
-            int tag = y > 0 && y < Height && Same(f - Width, f) ? kind[f] : 0;
-            if (tag == 0 || tag != tagV[f]) V[f] = 0;
-            tagV[f] = tag;
+            int i = active[k], layer = i / Width * KindSlots + kind[i];
+            if (rowStamp[layer] != propertyTick) { rowStamp[layer] = propertyTick; rowBuoyancy[layer] = buoyancy[i]; }
+            else if (Math.Abs(buoyancy[i] - rowBuoyancy[layer]) > 1e-13) { resting = false; break; }
+        }
+        if (resting)
+        {
+            for (int k = 0; k < faceCountU; k++) if (U[facesU[k]] != 0) { resting = false; break; }
+            for (int k = 0; k < faceCountV && resting; k++) if (V[facesV[k]] != 0) { resting = false; break; }
         }
         return count;
     }
@@ -77,6 +135,7 @@ public sealed partial class LiquidField
     {
         if (seconds <= 0) return;
         if (UpdateGeometry(world) == 0) { DivergenceRms = 0; return; }
+        if (resting) { DivergenceRms = 0; return; }
         U.CopyTo(oldU, 0); V.CopyTo(oldV, 0);
         AdvectFaces(U, tagU, true, seconds);
         AdvectFaces(V, tagV, false, seconds);
@@ -108,11 +167,11 @@ public sealed partial class LiquidField
     private void AdvectFaces(double[] field, int[] tags, bool horizontal, double seconds)
     {
         int stride = horizontal ? Width + 1 : Width, rows = horizontal ? Height : Height + 1;
-        for (int y = 0; y < rows; y++)
-        for (int x = 0; x < stride; x++)
+        var faces = horizontal ? facesU : facesV;
+        int count = horizontal ? faceCountU : faceCountV;
+        for (int k = 0; k < count; k++)
         {
-            int f = y * stride + x, tag = tags[f];
-            if (tag == 0) continue;
+            int f = faces[k], x = f % stride, y = f / stride, tag = tags[f];
             double xx = x + (horizontal ? 0 : .5), yy = y + (horizontal ? .5 : 0);
             double vx = Sample(oldU, Width + 1, Height, xx, yy - .5);
             double vy = Sample(oldV, Width, Height + 1, xx - .5, yy);
@@ -148,11 +207,11 @@ public sealed partial class LiquidField
     {
         int stride = horizontal ? Width + 1 : Width, rows = horizontal ? Height : Height + 1;
         equation.Count = 0; equation.Stride = stride;
-        for (int y = 0; y < rows; y++)
-        for (int x = 0; x < stride; x++)
+        var faces = horizontal ? facesU : facesV;
+        int count = horizontal ? faceCountU : faceCountV;
+        for (int k = 0; k < count; k++)
         {
-            int f = y * stride + x;
-            if (tags[f] == 0) continue;
+            int f = faces[k], x = f % stride, y = f / stride;
             equation.Active[equation.Count++] = f;
             equation.Rhs[f] = field[f];
             double diagonal = 1, viscosity = FaceNu(x, y, horizontal);
@@ -173,6 +232,7 @@ public sealed partial class LiquidField
             equation.North[f] = Coefficient(x, y - 1); equation.South[f] = Coefficient(x, y + 1);
             equation.Diagonal[f] = diagonal;
         }
+        equation.MatrixChanged();
         equation.Solve(field, 1e-9);
     }
 
@@ -182,9 +242,9 @@ public sealed partial class LiquidField
     private void Transport(World world, double seconds)
     {
         double maxOutflow = 0;
-        for (int i = 0; i < kind.Length; i++)
+        for (int k = 0; k < activeCount; k++)
         {
-            if (kind[i] == 0) continue;
+            int i = active[k];
             int x = i % Width, y = i / Width, f = y * (Width + 1) + x;
             double rate = Math.Max(0, -U[f]) + Math.Max(0, U[f + 1])
                 + Math.Max(0, -V[i]) + Math.Max(0, V[i + Width]);
@@ -194,7 +254,7 @@ public sealed partial class LiquidField
         double dt = seconds / substeps;
         for (int step = 0; step < substeps; step++)
         {
-            Array.Clear(dm); Array.Clear(de); Array.Clear(ds); Array.Clear(dr);
+            for (int k = 0; k < activeCount; k++) { int i = active[k]; dm[i] = de[i] = ds[i] = dr[i] = 0; }
             void Flux(int a, int b, double fraction)
             {
                 if (fraction == 0 || LiquidProperties.Kind(world.Cells[a]) != kind[a]
@@ -206,17 +266,15 @@ public sealed partial class LiquidField
                 dm[a] -= mass; dm[b] += mass; de[a] -= energy; de[b] += energy;
                 ds[a] -= salt; ds[b] += salt; dr[a] -= reference; dr[b] += reference;
             }
-            for (int y = 0; y < Height; y++)
-            for (int x = 0; x < Width; x++)
+            for (int k = 0; k < activeCount; k++)
             {
-                int i = y * Width + x;
-                if (kind[i] == 0) continue;
+                int i = active[k], x = i % Width, y = i / Width;
                 if (x + 1 < Width && Same(i, i + 1)) Flux(i, i + 1, U[y * (Width + 1) + x + 1] * dt / Dx);
                 if (y + 1 < Height && Same(i, i + Width)) Flux(i, i + Width, V[i + Width] * dt / Dx);
             }
-            for (int i = 0; i < kind.Length; i++)
+            for (int k = 0; k < activeCount; k++)
             {
-                if (kind[i] == 0) continue;
+                int i = active[k];
                 ref var p = ref world.Cells[i];
                 double reference = p.Mass * p.EnthalpyOffset + dr[i];
                 p.Mass += dm[i]; p.Energy += de[i]; p.DissolvedSalt += ds[i];

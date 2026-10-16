@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Powder;
 
 public sealed partial class World
@@ -15,18 +17,27 @@ public sealed partial class World
     public AirField Air { get; }
     public LiquidField Liquids { get; }
     public long Tick { get; private set; }
+    public long VisualRevision { get; private set; }
+    private bool hadBodies;
     public double EscapedMass { get; private set; }
     public double EscapedEnergy { get; private set; }
     public double ExternalEnergy { get; private set; }
-    public int Count => Cells.Count(p => p.Element != Element.Empty);
+    public int Count => Statistics().Particles;
+    private readonly int[] activeCells;
+    private int activeCount;
     private Random random;
     private uint stamp;
+    public bool ProfileSteps { get; set; }
+    public readonly record struct Timings(double Thermal, double Liquid, double Motion, double Bubbles, double Atmosphere);
+    public Timings LastTimings { get; private set; }
 
     public World(int width, int height, int seed = 417)
     {
         if (width < 8 || height < 8) throw new ArgumentOutOfRangeException(nameof(width));
         Width = width; Height = height;
         Cells = new Particle[width * height];
+        Bubbles = new Particle[Cells.Length]; bubbleScratch = new Particle[Cells.Length]; bubbleListed = new bool[Cells.Length];
+        activeCells = new int[Cells.Length];
         Air = new AirField(width, height);
         Liquids = new LiquidField(width, height);
         random = new Random(seed);
@@ -38,7 +49,8 @@ public sealed partial class World
     public void Set(int x, int y, Element e, double? temperature = null)
     {
         if (!Inside(x, y)) return;
-        if (e == Element.Empty) { At(x, y) = default; return; }
+        VisualRevision++;
+        if (e == Element.Empty) { At(x, y) = default; Bubbles[y * Width + x] = default; return; }
         Material m = Materials.Get(e);
         double t = temperature ?? m.SpawnTemperature;
         double mass = m.Density * CellVolume;
@@ -54,7 +66,10 @@ public sealed partial class World
 
     public void Clear()
     {
-        Array.Clear(Cells); Air.Reset(); Liquids.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
+        VisualRevision++; hadBodies = false;
+        Array.Clear(Cells); Array.Clear(Bubbles); Array.Clear(bubbleScratch);
+        bubbleIndices.Clear(); nextBubbleIndices.Clear(); Array.Clear(bubbleListed); activeCount = 0;
+        Air.Reset(); Liquids.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
         random = new Random(417);
     }
 
@@ -70,6 +85,7 @@ public sealed partial class World
     // Each covered cell receives the same power, not the same temperature change.
     public void HeatBrush(int x, int y, int radius, double powerWatts, double seconds = FixedDelta)
     {
+        VisualRevision++;
         if (!double.IsFinite(powerWatts) || !double.IsFinite(seconds) || seconds < 0)
             throw new ArgumentOutOfRangeException(nameof(powerWatts));
         for (int yy = y - radius; yy <= y + radius; yy++)
@@ -93,44 +109,90 @@ public sealed partial class World
             mass += p.Mass; energy += p.Energy;
             if (p.Element != Element.Empty) count++;
         }
+        foreach (int i in bubbleIndices)
+        {
+            ref readonly var p = ref Bubbles[i];
+            mass += p.Mass; energy += p.Energy;
+            if (p.Element != Element.Empty) count++;
+        }
         return (mass, energy, count);
     }
 
     public void Step()
     {
+        long profiling = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         stamp++; Tick++;
+        activeCount = 0;
+        for (int i = 0; i < Cells.Length; i++) if (Cells[i].Element != Element.Empty) activeCells[activeCount++] = i;
         if (AtmosphereEnabled) Air.UpdateObstacles(this);
+        if (activeCount == 0 && bubbleIndices.Count == 0)
+        {
+            if (hadBodies) { Liquids.Reset(); hadBodies = false; }
+            if (AtmosphereEnabled) Air.Step(FixedDelta);
+            if (AtmosphereEnabled && Air.Active) VisualRevision++;
+            if (ProfileSteps) LastTimings = new(0, 0, 0, 0, Stopwatch.GetElapsedTime(profiling).TotalMilliseconds);
+            return;
+        }
+        hadBodies = true; VisualRevision++;
         // Two smaller, alternating sweeps reduce splitting error without a stability cap on k.
         for (int substep = 0; substep < ThermalSubsteps; substep++)
         {
             double seconds = FixedDelta / ThermalSubsteps;
-            for (int k = 0; k < Cells.Length; k++)
+            for (int k = 0; k < activeCount; k++)
             {
-                int i = ((Tick + substep) & 1) == 0 ? k : Cells.Length - 1 - k;
+                int i = activeCells[((Tick + substep) & 1) == 0 ? k : activeCount - 1 - k];
                 if (Cells[i].Element == Element.Empty) continue;
                 if (i % Width + 1 < Width) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + 1], seconds);
                 if (i + Width < Cells.Length) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + Width], seconds);
-                if (AtmosphereEnabled) Air.ExchangeSurface(this, i % Width, i / Width, seconds);
+                if (AtmosphereEnabled && ExposedToGas(i)) Air.ExchangeSurface(this, i % Width, i / Width, seconds);
             }
         }
+        double thermalMs = ProfileSteps ? Stopwatch.GetElapsedTime(profiling).TotalMilliseconds : 0;
+        long phaseStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
+        ReleaseVapor();
+        long liquidStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         Liquids.Step(this, FixedDelta);
-        // Bottom-up sweep plus stamps ensure a particle is moved at most once per tick.
+        double liquidMs = ProfileSteps ? Stopwatch.GetElapsedTime(liquidStart).TotalMilliseconds : 0;
+        long motionStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
+        // Visit occupied rows bottom-up, alternating horizontal order. New parcels
+        // have the current stamp and cannot acquire a second timestep this frame.
         bool reverse = (Tick & 1) == 0;
-        for (int y = Height - 1; y >= 0; y--)
-            for (int k = 0; k < Width; k++)
+        for (int end = activeCount - 1; end >= 0;)
+        {
+            int y = activeCells[end] / Width, start = end;
+            while (start > 0 && activeCells[start - 1] / Width == y) start--;
+            for (int k = start; k <= end; k++)
             {
-                int x = reverse ? Width - 1 - k : k;
-                int i = y * Width + x;
+                int i = activeCells[reverse ? end - k + start : k];
                 if (Cells[i].Element == Element.Empty || Cells[i].Stamp == stamp) continue;
                 Cells[i].Stamp = stamp;
-                React(i, x, y);
-                Move(i, x, y);
+                React(i, i % Width, y);
+                Move(i, i % Width, y);
             }
+            end = start - 1;
+        }
+        double motionMs = ProfileSteps ? Stopwatch.GetElapsedTime(motionStart).TotalMilliseconds : 0;
+        long bubblesStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
+        if (bubbleIndices.Count != 0) StepBubbles();
+        double bubblesMs = ProfileSteps ? Stopwatch.GetElapsedTime(bubblesStart).TotalMilliseconds : 0;
+        double releaseMs = ProfileSteps ? Stopwatch.GetElapsedTime(phaseStart, liquidStart).TotalMilliseconds : 0;
+        long atmosphereStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         if (AtmosphereEnabled)
         {
             Air.UpdateObstacles(this);
             Air.Step(FixedDelta);
         }
+        if (ProfileSteps) LastTimings = new(thermalMs, liquidMs, motionMs, bubblesMs + releaseMs,
+            Stopwatch.GetElapsedTime(atmosphereStart).TotalMilliseconds);
+    }
+
+    private bool ExposedToGas(int i)
+    {
+        bool Gas(int j) => Cells[j].Element == Element.Empty
+            || Materials.Get(Cells[j].Element).State is MatterState.Gas or MatterState.Flame;
+        int x = i % Width;
+        return x == 0 || x == Width - 1 || i < Width || Gas(i - 1) || Gas(i + 1)
+            || Gas(i - Width) || i + Width < Cells.Length && Gas(i + Width);
     }
 
     private void React(int i, int x, int y)

@@ -2,6 +2,17 @@ namespace Powder;
 
 public static class Scenes
 {
+    public static void Boiling(World w)
+    {
+        w.Clear();
+        int x = w.Width / 2 - 60, y = w.Height - 32;
+        Rect(w, x - 3, y - 90, 3, 94, Element.Glass, 100);
+        Rect(w, x + 120, y - 90, 3, 94, Element.Glass, 100);
+        Rect(w, x - 3, y, 126, 4, Element.Glass, 100);
+        Rect(w, x, y - 80, 120, 80, Element.Water, 100);
+        Rect(w, x + 44, y - 5, 32, 5, Element.Copper, 130);
+    }
+
     public static void LiquidConvection(World w)
     {
         w.Clear();

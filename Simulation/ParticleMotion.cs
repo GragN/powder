@@ -10,12 +10,12 @@ public sealed partial class World
         bool gas = state is MatterState.Gas or MatterState.Flame;
         ref var p = ref Cells[i];
         double dx, dy;
-        if (gas && AtmosphereEnabled)
+        if (gas && (AtmosphereEnabled || HasLiquidNeighbor(x, y)))
         {
             // Gas markers are entrained by the carrier flow, rather than moving upward on a timer.
-            var flow = Air.VelocityAtFine(x, y);
-            double targetX = flow.X / CellSize, targetY = flow.Y / CellSize;
-            const double mixingTime = .04;
+            var flow = BubbleVelocity(x, y, p);
+            double targetX = flow.X, targetY = flow.Y;
+            double mixingTime = flow.Relaxation;
             double decay = Math.Exp(-FixedDelta / mixingTime);
             dx = targetX * FixedDelta + (p.VelocityX - targetX) * mixingTime * (1 - decay);
             dy = targetY * FixedDelta + (p.VelocityY - targetY) * mixingTime * (1 - decay);
@@ -62,18 +62,8 @@ public sealed partial class World
             }
         }
         if (gas || !blockedDown) return;
-        // A one-cell surface height difference supplies gravitational head. Viscous
-        // mobility (thin-layer estimate) is bounded by the gravity-wave speed.
-        // This remains a whole-cell free surface, while the bulk flow is continuous.
-        if (state == MatterState.Liquid)
-        {
-            double viscosity = LiquidProperties.KinematicViscosity(Cells[i]);
-            double surfaceSpeed = Math.Min(Math.Sqrt(Gravity * CellSize), Gravity * CellSize * CellSize / (3 * viscosity));
-            if (random.NextDouble() >= surfaceSpeed * FixedDelta / CellSize) return;
-        }
+        if (state == MatterState.Liquid) { FlowLiquid(i, x, y); return; }
         int direction = random.Next(2) == 0 ? -1 : 1;
         if (TryMove(i, x + direction, y + 1) || TryMove(i, x - direction, y + 1)) return;
-        if (state != MatterState.Liquid) return;
-        if (!TryMove(i, x + direction, y)) TryMove(i, x - direction, y);
     }
 }

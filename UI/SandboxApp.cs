@@ -34,6 +34,9 @@ public sealed class SandboxApp
     private double toastUntil;
     private double accumulator;
     private double physicsStepSeconds = .004;
+    private World? renderedWorld;
+    private long renderedRevision = -1;
+    private bool renderedThermal, renderedAtmosphere;
     // Admit less simulation time under load, rather than running a long catch-up
     // batch that blocks mouse input. Every admitted step still has the same physical dt.
     private int FrameSteps => Math.Clamp((int)(.020 / Math.Max(.001, physicsStepSeconds)), 1, 8);
@@ -69,6 +72,7 @@ public sealed class SandboxApp
             {
                 Scenes.Convection(world); thermal = true; showAirflow = true;
             }
+            if (args.Contains("--boiling-demo")) Scenes.Boiling(world);
             if (args.Contains("--liquid-demo"))
             {
                 Scenes.LiquidConvection(world); thermal = true; showAirflow = true;
@@ -91,7 +95,12 @@ public sealed class SandboxApp
                 }
                 if (steps > 0) physicsStepSeconds = .5 * physicsStepSeconds + .5 * Stopwatch.GetElapsedTime(started).TotalSeconds / steps;
                 if (frame % 15 == 0) stats = world.Statistics();
-                RenderPixels();
+                if (renderedWorld != world || renderedRevision != world.VisualRevision
+                    || renderedThermal != thermal || renderedAtmosphere != world.AtmosphereEnabled)
+                {
+                    RenderPixels(); renderedWorld = world; renderedRevision = world.VisualRevision;
+                    renderedThermal = thermal; renderedAtmosphere = world.AtmosphereEnabled;
+                }
                 if (smoke && frame == 0 && pixels.Any(c => !c.Equals(CanvasBackground)))
                     throw new InvalidOperationException("Startup canvas must have a plain background.");
                 BeginDrawing();
@@ -121,7 +130,7 @@ public sealed class SandboxApp
                     {
                         if (!File.Exists(scenePath) || !thermal || !paused || tool != 0)
                             throw new InvalidOperationException("UI smoke actions did not complete.");
-                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear.");
+                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear, fractional boiling, submerged vapor.");
                     }
                     break;
                 }
@@ -317,7 +326,10 @@ public sealed class SandboxApp
         Particle particle = default;
         Vector2 mouse = GetMousePosition();
         if (InCanvas(mouse) && !help && pendingAction is null)
-            particle = world.At((int)(mouse.X - CanvasX) / 2, (int)(mouse.Y - CanvasY) / 2);
+        {
+            int i = (int)(mouse.Y - CanvasY) / 2 * GridWidth + (int)(mouse.X - CanvasX) / 2;
+            particle = world.Bubbles[i].Element != Element.Empty ? world.Bubbles[i] : world.Cells[i];
+        }
         bool hasParticle = particle.Element != Element.Empty;
         bool hasAir = !hasParticle && InCanvas(mouse) && !help && pendingAction is null && world.AtmosphereEnabled;
         double airTemperature = hasAir ? world.Air.TemperatureAtFine((int)(mouse.X - CanvasX) / 2,
@@ -327,7 +339,9 @@ public sealed class SandboxApp
         Text("Mass", 916, 14, 9, Muted);
         Text(hasParticle ? Materials.Name(particle) : hasAir ? "Air" : "--", 648, 30, 12, Ink);
         Text(hasParticle ? $"{particle.Temperature:F1} C" : hasAir ? $"{airTemperature:F1} C" : "--", 788, 30, 12, Ink);
-        Text(hasParticle ? $"{particle.Mass * 1000:F3} g" : "--", 916, 30, 12, Ink);
+        string massLabel = particle.Mass >= 1e-6 ? $"{particle.Mass * 1000:F3} g"
+            : $"{particle.Mass * 1e6:F3} mg";
+        Text(hasParticle ? massLabel : "--", 916, 30, 12, Ink);
     }
 
     private void Canvas()
@@ -462,6 +476,13 @@ public sealed class SandboxApp
                 c = Mix(c, new(255, 125, 54, 255), glow);
             }
             pixels[i] = c;
+        }
+        foreach (int i in world.BubbleLocations)
+        {
+            ref readonly var bubble = ref world.Bubbles[i];
+            if (bubble.Element == Element.Empty) continue;
+            Rgb c = Materials.Get(bubble.Element).Color;
+            pixels[i] = thermal ? HeatColor(bubble.Temperature) : new Color(c.R, c.G, c.B, (byte)255);
         }
         UpdateTexture(texture, pixels);
     }
@@ -637,6 +658,21 @@ public sealed class SandboxApp
             Press(Control.Save); Press(Control.Clear); ConfirmAction(); Press(Control.Load);
             if (world.At(200, 30).Element != Element.Vapor || world.At(200, 30).MeltOrigin != Element.Oil)
                 throw new InvalidOperationException("UI failed to restore oil vapor.");
+        }
+        if (frame == 90)
+        {
+            Pick(1); world.Set(200, 80, Element.Water, 100);
+            double q = world.At(200, 80).Mass * Thermodynamics.Vaporization * .01;
+            world.HeatBrush(200, 80, 0, 1, q); Press(Control.Step);
+            if (!world.Bubbles.Any(p => p.Element == Element.Steam))
+                throw new InvalidOperationException("Partial boiling did not create a submerged bubble.");
+            SetMousePosition(CanvasX + 200 * 2 + 1, CanvasY + 80 * 2 + 1);
+        }
+        if (frame == 100)
+        {
+            Press(Control.Save); Press(Control.Clear); ConfirmAction(); Press(Control.Load);
+            if (!world.Bubbles.Any(p => p.Element == Element.Steam))
+                throw new InvalidOperationException("UI failed to restore submerged vapor.");
         }
     }
 }

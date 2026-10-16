@@ -74,13 +74,16 @@ public static class Thermodynamics
         }
         Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         double h = p.Energy / p.Mass - p.EnthalpyOffset;
+        double cp = Materials.Get(origin).SpecificHeat;
+        // Most solid contacts are far below melting. Their temperature does not
+        // need the boiling curve or any vapor coefficients.
+        if (CanMelt(origin) && h < cp * MeltingPoint(origin)) return h / cp;
         if (VaporProperties.Supports(origin))
         {
             double start = VaporProperties.BoilingLiquid(origin), end = VaporProperties.BoilingGas(origin);
             if (h >= end) return VaporProperties.BoilingPoint(origin) + (h - end) / VaporProperties.SpecificHeat(origin);
             if (h >= start) return VaporProperties.BoilingPoint(origin);
         }
-        double cp = Materials.Get(origin).SpecificHeat;
         if (CanMelt(origin))
         {
             double melt = MeltingPoint(origin), start = cp * melt;
@@ -94,6 +97,8 @@ public static class Thermodynamics
     public static void ResolvePhase(ref Particle p)
     {
         Element before = p.Element;
+        if (CanMelt(before) && p.Energy < p.Mass * (p.EnthalpyOffset + Materials.Get(before).SpecificHeat * MeltingPoint(before)))
+            return;
         Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         if (VaporProperties.Supports(origin))
         {
@@ -148,6 +153,13 @@ public static class Thermodynamics
                 m * IceHeat + salt, m * WaterHeat + salt, m * SteamHeat + salt);
         }
         Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
+        if (CanMelt(origin))
+        {
+            double start = p.Mass * (p.EnthalpyOffset + Materials.Get(origin).SpecificHeat * MeltingPoint(origin));
+            double epsilon = 1e-12 * Math.Max(1, Math.Abs(p.Energy));
+            if (p.Energy < start - epsilon)
+                return (p.Mass * Materials.Get(origin).SpecificHeat, heating ? start : double.NegativeInfinity);
+        }
         if (VaporProperties.Supports(origin))
         {
             double c = p.Mass * (p.EnthalpyOffset + VaporProperties.BoilingLiquid(origin));
