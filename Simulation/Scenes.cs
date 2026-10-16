@@ -2,6 +2,19 @@ namespace Powder;
 
 public static class Scenes
 {
+    public static void LiquidConvection(World w)
+    {
+        w.Clear();
+        // A finite copper heater under water, not a prescribed-temperature source.
+        int x = w.Width / 2 - 72, y = w.Height - 32;
+        Rect(w, x - 3, y - 102, 3, 106, Element.Glass);
+        Rect(w, x + 144, y - 102, 3, 106, Element.Glass);
+        Rect(w, x - 3, y, 150, 4, Element.Glass);
+        Rect(w, x, y - 96, 144, 96, Element.Water, 20);
+        Rect(w, x + 58, y - 17, 28, 12, Element.Water, 65);
+        Rect(w, x + 56, y - 5, 32, 5, Element.Copper, 95);
+    }
+
     public static void Convection(World w)
     {
         w.Clear();

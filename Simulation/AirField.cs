@@ -114,7 +114,7 @@ public sealed partial class AirField
                 // Interior faces never use an infinite temperature reservoir.
                 if (distance == 1 && yy < fineHeight)
                 {
-                    double boundaryK = Materials.Get(p.Element).Conductivity;
+                    double boundaryK = LiquidProperties.Conductivity(p);
                     double gap = .5 * (nx != 0 ? Dx : Dy);
                     double boundaryG = World.CellSize * World.Depth / (.5 * World.CellSize / boundaryK + gap / Conductivity);
                     BoundaryHeat -= Thermodynamics.ExchangeWithReservoir(ref p, AmbientTemperature, boundaryG, seconds);
@@ -125,7 +125,7 @@ public sealed partial class AirField
             if (state is MatterState.Solid or MatterState.Powder or MatterState.Liquid) return;
             int i = IndexAtFine(xx, yy);
             if (Blocked[i]) continue;
-            double k = Materials.Get(p.Element).Conductivity;
+            double k = LiquidProperties.Conductivity(p);
             double airDistance = .5 * (nx != 0 ? Dx : Dy);
             double g = World.CellSize * World.Depth / (.5 * World.CellSize / k + airDistance / Conductivity);
             var air = new Particle { Element = Element.Air, Mass = Capacity / SpecificHeat,

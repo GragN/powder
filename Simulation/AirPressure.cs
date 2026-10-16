@@ -33,7 +33,7 @@ public sealed partial class AirField
             direction[i] = residual[i] / diagonal[i];
             rz += residual[i] * direction[i];
         }
-        for (int iteration = 0; iteration < 80 && rz > 1e-16; iteration++)
+        for (int iteration = 0; iteration < 160 && rz > 1e-16; iteration++)
         {
             Multiply(direction, product, ax, ay);
             double denominator = 0;

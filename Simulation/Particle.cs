@@ -18,7 +18,7 @@ public struct Particle
 
     // Sensible heat capacity. Latent intervals are handled separately by the enthalpy solver.
     public readonly double HeatCapacity => Math.Max(1e-12,
-        (Mass - DissolvedSalt) * Materials.Get(Element).SpecificHeat + DissolvedSalt * Materials.Get(Element.Salt).SpecificHeat);
+        (Mass - DissolvedSalt) * (Element == Element.Lava ? LiquidProperties.MeltHeatCapacity(MeltOrigin) : Materials.Get(Element).SpecificHeat) + DissolvedSalt * Materials.Get(Element.Salt).SpecificHeat);
 
     public readonly double Temperature => Thermodynamics.Temperature(this);
 }

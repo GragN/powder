@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Diagnostics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
 
@@ -32,6 +33,10 @@ public sealed class SandboxApp
     private string toast = "";
     private double toastUntil;
     private double accumulator;
+    private double physicsStepSeconds = .004;
+    // Admit less simulation time under load, rather than running a long catch-up
+    // batch that blocks mouse input. Every admitted step still has the same physical dt.
+    private int FrameSteps => Math.Clamp((int)(.020 / Math.Max(.001, physicsStepSeconds)), 1, 8);
     private (double Mass, double Energy, int Particles) stats;
     private string scenePath = WorldFile.DefaultPath;
     private string? pendingAction;
@@ -64,6 +69,10 @@ public sealed class SandboxApp
             {
                 Scenes.Convection(world); thermal = true; showAirflow = true;
             }
+            if (args.Contains("--liquid-demo"))
+            {
+                Scenes.LiquidConvection(world); thermal = true; showAirflow = true;
+            }
             stats = world.Statistics();
             if (smoke && stats.Particles != 0)
                 throw new InvalidOperationException("Startup canvas must be empty.");
@@ -73,11 +82,14 @@ public sealed class SandboxApp
                 Input();
                 if (smoke) SmokeActions(frame);
                 double dt = Math.Min(GetFrameTime(), .1);
-                accumulator = paused ? 0 : Math.Min(accumulator + dt * speed, World.FixedDelta * 8);
+                accumulator = paused ? 0 : Math.Min(accumulator + dt * speed, World.FixedDelta * FrameSteps);
+                long started = Stopwatch.GetTimestamp();
+                int steps = 0;
                 while (accumulator >= World.FixedDelta)
                 {
-                    world.Step(); accumulator -= World.FixedDelta;
+                    world.Step(); accumulator -= World.FixedDelta; steps++;
                 }
+                if (steps > 0) physicsStepSeconds = .5 * physicsStepSeconds + .5 * Stopwatch.GetElapsedTime(started).TotalSeconds / steps;
                 if (frame % 15 == 0) stats = world.Statistics();
                 RenderPixels();
                 if (smoke && frame == 0 && pixels.Any(c => !c.Equals(CanvasBackground)))
@@ -186,7 +198,7 @@ public sealed class SandboxApp
             int distance = Math.Max(1, (int)Vector2.Distance(start, point));
             double strokeSeconds = Math.Min(GetFrameTime(), .1);
             if (!paused) strokeSeconds = Math.Min(strokeSeconds * speed,
-                Math.Max(0, World.FixedDelta * 8 - accumulator));
+                Math.Max(0, World.FixedDelta * FrameSteps - accumulator));
             // A continuous stroke does not leave gaps between frames.
             for (int n = 0; n <= distance; n++)
             {
@@ -321,33 +333,46 @@ public sealed class SandboxApp
     {
         DrawTextureEx(texture, new(CanvasX, CanvasY), 0, 2, Color.White);
         DrawLine(CanvasX, CanvasY + GridHeight * 2 + 1, CanvasX + GridWidth * 2, CanvasY + GridHeight * 2 + 1, Border);
-        if (showAirflow && world.AtmosphereEnabled) DrawAirflow();
+        if (showAirflow) DrawFlow();
         Vector2 mouse = GetMousePosition();
         if (!InCanvas(mouse) || help || pendingAction is not null) return;
         int x = (int)(mouse.X - CanvasX) / 2, y = (int)(mouse.Y - CanvasY) / 2;
         DrawCircleLines(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1, radius * 2, new(220, 224, 230, 130));
     }
 
-    private void DrawAirflow()
+    private void DrawFlow()
     {
+        // Liquid speeds are much lower than air speeds; arrows use separate visual scales.
+        for (int y = 8; y < GridHeight; y += 12)
+        for (int x = 8; x < GridWidth; x += 12)
+        {
+            if (LiquidProperties.Kind(world.At(x, y)) == 0) continue;
+            var v = world.Liquids.VelocityAtFine(x, y);
+            DrawFlowArrow(new(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1), v.X, v.Y, 600, new(216, 240, 255, 200));
+        }
+        if (!world.AtmosphereEnabled) return;
         var air = world.Air;
         for (int y = 2; y < air.Height; y += 4)
         for (int x = 2; x < air.Width; x += 4)
         {
             if (air.Blocked[y * air.Width + x]) continue;
             var v = air.Velocity((x + .5) * air.Dx, (y + .5) * air.Dy);
-            var vector = new Vector2((float)v.X, (float)v.Y);
-            if (vector.LengthSquared() < .000025f) continue;
             Vector2 start = new(CanvasX + (float)((x + .5) * air.Dx / World.CellSize * 2),
                 CanvasY + (float)((y + .5) * air.Dy / World.CellSize * 2));
-            Vector2 direction = Vector2.Normalize(vector);
-            Vector2 end = start + direction * Math.Min(18, vector.Length() * 40);
-            var color = new Color(130, 208, 195, 155);
-            DrawLineEx(start, end, 1, color);
-            var normal = new Vector2(-direction.Y, direction.X);
-            DrawLineEx(end, end - direction * 3 + normal * 2, 1, color);
-            DrawLineEx(end, end - direction * 3 - normal * 2, 1, color);
+            DrawFlowArrow(start, v.X, v.Y, 40, new(130, 208, 195, 155));
         }
+    }
+
+    private static void DrawFlowArrow(Vector2 start, double vx, double vy, float scale, Color color)
+    {
+        var vector = new Vector2((float)vx, (float)vy);
+        float length = Math.Min(18, vector.Length() * scale);
+        if (length < 2) return;
+        Vector2 direction = Vector2.Normalize(vector), end = start + direction * length;
+        DrawLineEx(start, end, 1, color);
+        var normal = new Vector2(-direction.Y, direction.X);
+        DrawLineEx(end, end - direction * 3 + normal * 2, 1, color);
+        DrawLineEx(end, end - direction * 3 - normal * 2, 1, color);
     }
 
     private void Sidebar()
@@ -378,7 +403,7 @@ public sealed class SandboxApp
         Text(size, 1128 - sizeWidth / 2, 460, 12, Ink);
         ControlButton(Control.Larger, "+");
         ControlButton(Control.Properties, "Properties  I", showProperties);
-        ControlButton(Control.Airflow, "Airflow  A", showAirflow);
+        ControlButton(Control.Airflow, "Flow  A", showAirflow);
         if (!showProperties) return;
         var selectedMaterial = Materials.Get(selected);
         Text(selectedMaterial.Name, 1000, 547, 16, Ink);
@@ -459,7 +484,7 @@ public sealed class SandboxApp
         string[] lines = ["Left mouse: draw     Right mouse: erase     Middle mouse: pick",
             "Mouse wheel or [ / ]: change brush radius",
             "B: draw     H: heat     J: cool     1-9: quick material selection",
-            "Space: pause     N: single step     T: temperature     A: airflow",
+            "Space: pause     N: single step     T: temperature     A: flow",
             "Ctrl+S: save scene     Ctrl+O: load scene",
             "C: clear canvas     R: load demo     I: material properties",
             "F1 or Esc: close this guide"];

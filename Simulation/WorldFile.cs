@@ -7,7 +7,8 @@ public static class WorldFile
     private sealed record Cell(int Index, Element Element, Element Origin, double Mass,
         double Energy, double Salt, double Velocity, double Travel, float Life, byte Variation,
         double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0);
-    private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells, AirField.State? Air = null);
+    private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells,
+        AirField.State? Air = null, LiquidField.State? Liquids = null);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
 
     public static string DefaultPath => Path.Combine(
@@ -21,8 +22,8 @@ public static class WorldFile
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temp = full + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(2, world.Width, world.Height,
-            world.AtmosphereEnabled, cells, world.Air.Capture()), Options));
+        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(3, world.Width, world.Height,
+            world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture()), Options));
         File.Move(temp, full, true);
     }
 
@@ -31,7 +32,7 @@ public static class WorldFile
         if (new FileInfo(path).Length > 64 * 1024 * 1024) throw new InvalidDataException("Scene is too large.");
         var s = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(path), Options)
             ?? throw new InvalidDataException("Empty scene.");
-        if (s.Version is not (1 or 2) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
+        if (s.Version is not (1 or 2 or 3) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
             throw new InvalidDataException("Unsupported scene version or dimensions.");
         var world = new World(s.Width, s.Height) { AtmosphereEnabled = s.Cooling };
         var occupied = new HashSet<int>();
@@ -53,10 +54,20 @@ public static class WorldFile
                 Life = c.Life, Variation = c.Variation, EnthalpyOffset = c.EnthalpyOffset,
                 VelocityX = c.VelocityX, TravelX = c.TravelX
             };
+            if (s.Version < 3 && c.Element == Element.Lava)
+            {
+                // Older files used 1200 J/(kg K) for every melt. Preserve their temperature.
+                ref var p = ref world.Cells[c.Index];
+                double end = p.Mass * (p.EnthalpyOffset + Materials.Get(p.MeltOrigin).SpecificHeat
+                    * Thermodynamics.MeltingPoint(p.MeltOrigin) + Thermodynamics.FusionHeat(p.MeltOrigin));
+                if (p.Energy > end) p.Energy = end + (p.Energy - end) * LiquidProperties.MeltHeatCapacity(p.MeltOrigin) / 1200;
+            }
         }
         world.Air.UpdateObstacles(world);
         if (s.Air is not null) world.Air.Restore(s.Air);
-        else if (s.Version == 2) throw new InvalidDataException("Missing atmosphere data.");
+        else if (s.Version >= 2) throw new InvalidDataException("Missing atmosphere data.");
+        if (s.Liquids is not null) world.Liquids.Restore(world, s.Liquids);
+        else if (s.Version >= 3) throw new InvalidDataException("Missing liquid flow data.");
         return world;
     }
 }

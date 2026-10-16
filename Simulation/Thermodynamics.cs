@@ -26,7 +26,7 @@ public static class Thermodynamics
 
     public static double LiquidEnthalpy(Element origin, double t) =>
         Materials.Get(origin).SpecificHeat * MeltingPoint(origin) + FusionHeat(origin)
-        + Materials.Get(Element.Lava).SpecificHeat * (t - MeltingPoint(origin));
+        + LiquidProperties.MeltHeatCapacity(origin) * (t - MeltingPoint(origin));
 
     public static double SpecificEnthalpy(Element e, double t)
     {
@@ -76,7 +76,7 @@ public static class Thermodynamics
         {
             double melt = MeltingPoint(origin), start = cp * melt;
             double end = start + FusionHeat(origin);
-            if (h >= end) return melt + (h - end) / Materials.Get(Element.Lava).SpecificHeat;
+            if (h >= end) return melt + (h - end) / LiquidProperties.MeltHeatCapacity(origin);
             if (h >= start) return melt;
         }
         return h / cp;
@@ -144,9 +144,9 @@ public static class Thermodynamics
             {
                 if (p.Energy < start - epsilon) return (p.Mass * cp, start);
                 if (p.Energy < end - epsilon) return (double.PositiveInfinity, end);
-                return (p.Mass * Materials.Get(Element.Lava).SpecificHeat, double.PositiveInfinity);
+                return (p.Mass * LiquidProperties.MeltHeatCapacity(origin), double.PositiveInfinity);
             }
-            if (p.Energy > end + epsilon) return (p.Mass * Materials.Get(Element.Lava).SpecificHeat, end);
+            if (p.Energy > end + epsilon) return (p.Mass * LiquidProperties.MeltHeatCapacity(origin), end);
             if (p.Energy > start + epsilon) return (double.PositiveInfinity, start);
             return (p.Mass * cp, double.NegativeInfinity);
         }
@@ -202,7 +202,7 @@ public static class Thermodynamics
         {
             double difference = n == 0 ? initialDifference : hot.Temperature - cold.Temperature;
             if (difference <= 1e-10) return;
-            double ka = Materials.Get(cold.Element).Conductivity, kb = Materials.Get(hot.Element).Conductivity;
+            double ka = LiquidProperties.Conductivity(cold), kb = LiquidProperties.Conductivity(hot);
             // Thermal resistances of the two half cells in series: G = k_harmonic A / dx.
             double conductance = contactConductance > 0 ? contactConductance : 2 * ka * kb / (ka + kb) * World.Depth;
             if (conductance <= 0) return;

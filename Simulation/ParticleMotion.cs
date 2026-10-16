@@ -62,22 +62,18 @@ public sealed partial class World
             }
         }
         if (gas || !blockedDown) return;
+        // A one-cell surface height difference supplies gravitational head. Viscous
+        // mobility (thin-layer estimate) is bounded by the gravity-wave speed.
+        // This remains a whole-cell free surface, while the bulk flow is continuous.
+        if (state == MatterState.Liquid)
+        {
+            double viscosity = LiquidProperties.KinematicViscosity(Cells[i]);
+            double surfaceSpeed = Math.Min(Math.Sqrt(Gravity * CellSize), Gravity * CellSize * CellSize / (3 * viscosity));
+            if (random.NextDouble() >= surfaceSpeed * FixedDelta / CellSize) return;
+        }
         int direction = random.Next(2) == 0 ? -1 : 1;
         if (TryMove(i, x + direction, y + 1) || TryMove(i, x - direction, y + 1)) return;
         if (state != MatterState.Liquid) return;
-        if (e == Element.Lava && random.Next(3) != 0) return;
-        int range = e == Element.Oil ? 3 : e == Element.Lava ? 1 : 5;
-        for (int sign = 0; sign < 2; sign++)
-        {
-            int dir = sign == 0 ? direction : -direction;
-            for (int distance = 1; distance <= range; distance++)
-            {
-                int xx = x + distance * dir;
-                if (xx < 0 || xx >= Width) { Escape(i); return; }
-                if (At(xx, y).Element != Element.Empty) break;
-                if (distance == range || y + 1 < Height && At(xx, y + 1).Element == Element.Empty)
-                { TryMove(i, xx, y); return; }
-            }
-        }
+        if (!TryMove(i, x + direction, y)) TryMove(i, x - direction, y);
     }
 }

@@ -405,6 +405,7 @@ public static partial class SelfTests
             Check(a.Cells.SequenceEqual(b.Cells), "determinism lost");
         });
         RunAtmosphereTests();
+        RunLiquidTests();
         Test("full demo remains finite and conserves the mass budget", () =>
         {
             var w = new World(SandboxApp.GridWidth, SandboxApp.GridHeight);
@@ -416,10 +417,11 @@ public static partial class SelfTests
             Near(Budget(w), energy, 1e-6);
             Check(w.Air.Heat.All(double.IsFinite) && w.Air.U.All(double.IsFinite) && w.Air.V.All(double.IsFinite),
                 "nonfinite atmospheric state");
-            Check(w.Air.DivergenceRms < .01, "full-scene air pressure projection did not converge");
+            Check(w.Liquids.DivergenceRms < .01, $"liquid projection divergence {w.Liquids.DivergenceRms}");
+            Check(w.Air.DivergenceRms < .01, $"full-scene air pressure projection did not converge: {w.Air.DivergenceRms}");
             Check(w.Cells.All(p => double.IsFinite(p.Energy) && double.IsFinite(p.Temperature)
                 && p.Mass >= 0 && p.Temperature >= -273.151), "nonphysical numerical state");
-            Console.WriteLine($"  demo: {w.Count:N0} particles, 360 steps in {timer.Elapsed.TotalSeconds:F2}s; air divergence RMS {w.Air.DivergenceRms:F5}/s");
+            Console.WriteLine($"  demo: {w.Count:N0} particles, 360 steps in {timer.Elapsed.TotalSeconds:F2}s; air divergence RMS {w.Air.DivergenceRms:F5}/s; liquid {w.Liquids.DivergenceRms:F5}/s");
         });
         Console.WriteLine($"\n{passed} passed, {failed} failed. Headless physics and scene checks completed.");
         return failed == 0 ? 0 : 1;

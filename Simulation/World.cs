@@ -13,6 +13,7 @@ public sealed partial class World
     public Particle[] Cells { get; }
     public bool AtmosphereEnabled { get; set; } = true;
     public AirField Air { get; }
+    public LiquidField Liquids { get; }
     public long Tick { get; private set; }
     public double EscapedMass { get; private set; }
     public double EscapedEnergy { get; private set; }
@@ -27,6 +28,7 @@ public sealed partial class World
         Width = width; Height = height;
         Cells = new Particle[width * height];
         Air = new AirField(width, height);
+        Liquids = new LiquidField(width, height);
         random = new Random(seed);
     }
 
@@ -52,7 +54,7 @@ public sealed partial class World
 
     public void Clear()
     {
-        Array.Clear(Cells); Air.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
+        Array.Clear(Cells); Air.Reset(); Liquids.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
         random = new Random(417);
     }
 
@@ -111,6 +113,7 @@ public sealed partial class World
                 if (AtmosphereEnabled) Air.ExchangeSurface(this, i % Width, i / Width, seconds);
             }
         }
+        Liquids.Step(this, FixedDelta);
         // Bottom-up sweep plus stamps ensure a particle is moved at most once per tick.
         bool reverse = (Tick & 1) == 0;
         for (int y = Height - 1; y >= 0; y--)
@@ -188,8 +191,12 @@ public sealed partial class World
         {
             MatterState state = Materials.Get(target).State;
             if (state is MatterState.Solid or MatterState.Powder) return false;
-            double a = Materials.Get(Cells[from].Element).Density;
-            double b = Materials.Get(target).Density;
+            // Same-fluid bulk motion and heat advection are resolved by the continuum solver.
+            // Whole-cell swaps are reserved for density separation at material interfaces.
+            int sourceKind = LiquidProperties.Kind(Cells[from]);
+            if (sourceKind != 0 && sourceKind == LiquidProperties.Kind(Cells[to])) return false;
+            double a = LiquidProperties.Density(Cells[from]);
+            double b = LiquidProperties.Density(Cells[to]);
             // Density swaps only along gravity; horizontal swaps would unmix arbitrarily.
             if (y == from / Width || (rising ? a >= b : a <= b)) return false;
         }
