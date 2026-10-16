@@ -16,7 +16,7 @@ public static partial class SelfTests
                 foreach (var cell in new[] { (14, 15), (16, 15), (15, 14), (15, 16) })
                     Check(w.Air.TemperatureAtFine(cell.Item1, cell.Item2) > 20,
                         $"air at {cell} was skipped because its coarse block contains material");
-                Check(w.Air.PocketHeat.Any(h => h > 0), "boundary gas has no finite thermal energy");
+                Check(w.Air.Capture().VolumeHeat!.Any(h => h > 0), "boundary gas has no finite thermal energy");
                 Near(Budget(w), budget, 1e-10);
             }
         });
@@ -29,7 +29,8 @@ public static partial class SelfTests
             for (int n = 0; n < 12; n++) w.Step();
             Check(w.Air.TemperatureAtFine(8, 8) > 40, "a closed gas pocket stayed at room temperature");
             Check(w.Air.TemperatureAtFine(8, 8) <= 100, "contact overshot the hottest body");
-            Check(w.Air.Blocked.All(b => b), "test did not isolate a sub-grid air pocket");
+            Check(w.Air.ControlVolumeCount == 1, "test did not isolate a one-cell air volume");
+            Near(w.Air.VolumeAtFine(8, 8), World.CellVolume, 1e-16);
             Near(Budget(w), budget, 1e-8);
         });
         Test("sub-grid air conducts across open faces and respects a one-cell wall", () =>
@@ -41,7 +42,7 @@ public static partial class SelfTests
                 int x = wall ? 10 : 9;
                 w.Set(8, 8, Element.Empty); w.Set(x, 8, Element.Empty);
                 w.Air.UpdateObstacles(w);
-                w.Air.PocketHeat[8 * w.Width + 8] = 60 * AirField.PocketCapacity;
+                w.Air.SetTemperatureAtFine(8, 8, 80);
                 double heat = w.Air.ExcessEnergy;
                 for (int n = 0; n < 12; n++) w.Air.Step(World.FixedDelta);
                 double cold = w.Air.TemperatureAtFine(x, 8), hot = w.Air.TemperatureAtFine(8, 8);
@@ -56,7 +57,7 @@ public static partial class SelfTests
             var w = new World(32, 32);
             w.Set(15, 15, Element.Stone);
             w.Air.UpdateObstacles(w);
-            w.Air.PocketHeat[12 * w.Width + 15] = 60 * AirField.PocketCapacity;
+            w.Air.SetTemperatureAtFine(15, 12, 80);
             double heat = w.Air.ExcessEnergy;
             for (int n = 0; n < 12; n++) w.Air.Step(World.FixedDelta);
             Check(w.Air.Heat.Any(h => h > 0), "heat remained trapped behind a coarse-grid interface");
@@ -70,15 +71,15 @@ public static partial class SelfTests
             w.Set(8, 8, Element.Empty); w.Set(10, 8, Element.Empty);
             w.Air.UpdateObstacles(w);
             var coarseMask = w.Air.Blocked.ToArray();
-            w.Air.PocketHeat[8 * w.Width + 8] = 60 * AirField.PocketCapacity;
+            w.Air.SetTemperatureAtFine(8, 8, 80);
             w.Air.Step(World.FixedDelta);
             w.Set(9, 8, Element.Empty); w.Air.UpdateObstacles(w);
             Check(w.Air.Blocked.SequenceEqual(coarseMask), "fixture changed the resolved velocity domain");
             for (int n = 0; n < 12; n++) w.Air.Step(World.FixedDelta);
             Check(w.Air.TemperatureAtFine(10, 8) > 20, "newly opened air passage did not conduct heat");
             w.Set(9, 8, Element.Glass); w.Air.UpdateObstacles(w);
-            Array.Clear(w.Air.PocketHeat);
-            w.Air.PocketHeat[8 * w.Width + 8] = 60 * AirField.PocketCapacity;
+            w.Air.SetTemperatureAtFine(10, 8, 20);
+            w.Air.SetTemperatureAtFine(8, 8, 80);
             double heat = w.Air.ExcessEnergy;
             for (int n = 0; n < 12; n++) w.Air.Step(World.FixedDelta);
             Near(w.Air.TemperatureAtFine(10, 8), 20, 1e-12);
@@ -101,7 +102,7 @@ public static partial class SelfTests
                 w.Air.UpdateObstacles(w);
                 Near(w.Air.ExcessEnergy, heat, 1e-12);
             }
-            Check(w.Air.PocketHeat.All(h => h == 0), "reopened air retained duplicate fine-grid heat");
+            Near(w.Air.TotalAirVolume, w.Width * w.Height * World.CellVolume, 1e-14);
         });
         Test("scene files preserve boundary-air heat and accept older coarse-air scenes", () =>
         {
@@ -110,22 +111,24 @@ public static partial class SelfTests
             {
                 var w = new World(32, 32);
                 w.Set(15, 15, Element.Copper, 200); w.Step();
-                Check(w.Air.PocketHeat.Any(h => h > 0), "save fixture has no heated boundary air");
+                Check(w.Air.Capture().VolumeHeat!.Any(h => h > 0), "save fixture has no heated boundary air");
                 WorldFile.Save(w, path);
                 var loaded = WorldFile.Load(path, 32, 32);
-                Check(loaded.Air.PocketHeat.SequenceEqual(w.Air.PocketHeat), "saved boundary air was lost");
+                Check(loaded.Air.Capture().VolumeHeat!.SequenceEqual(w.Air.Capture().VolumeHeat!), "saved boundary air was lost");
                 Near(Budget(loaded), Budget(w), 1e-10);
                 Near(loaded.Air.TemperatureAtFine(14, 15), w.Air.TemperatureAtFine(14, 15), 1e-12);
                 var data = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
-                data["Air"]!.AsObject().Remove("PocketHeat");
+                data["Air"]!.AsObject().Remove("VolumeHeat");
                 File.WriteAllText(path, data.ToJsonString());
                 bool rejected = false;
                 try { WorldFile.Load(path, 32, 32); } catch (InvalidDataException) { rejected = true; }
                 Check(rejected, "a new scene silently lost its required boundary-air data");
                 data["Version"] = 5;
+                data["Air"]!.AsObject().Remove("FaceVelocity");
+                data["Air"]!.AsObject().Remove("TrappedHeat");
                 File.WriteAllText(path, data.ToJsonString());
                 loaded = WorldFile.Load(path, 32, 32);
-                Check(loaded.Air.PocketHeat.All(h => h == 0), "legacy scene invented boundary energy");
+                Near(loaded.Air.ExcessEnergy, w.Air.ExcessEnergy, 1e-10);
                 loaded.Clear();
                 Near(loaded.Air.ExcessEnergy, 0, 1e-12);
             }

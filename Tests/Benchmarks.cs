@@ -54,7 +54,8 @@ public static class Benchmarks
                 allocated / MeasuredSteps, stats.Particles, stats.Mass, stats.Energy,
                 world.Cells.Count(p => p.Element is Element.Steam or Element.Vapor)
                     + world.Bubbles.Count(p => p.Element is Element.Steam or Element.Vapor),
-                scenario == "water-boiling" ? SurfaceBowlDepth(world) : null);
+                scenario == "water-boiling" ? SurfaceBowlDepth(world) : null,
+                world.Air.ControlVolumeCount, world.Air.OpenFaceCount);
             measurements.Add(measurement);
             Console.WriteLine($"{scenario}: {measurement.WallMillisecondsPerStep:F3} ms/step wall, "
                 + $"{measurement.CpuMillisecondsPerStep:F3} ms/step CPU, "
@@ -62,7 +63,7 @@ public static class Benchmarks
         }
         var report = new
         {
-            FormatVersion = 1,
+            FormatVersion = 2,
             Runtime = RuntimeInformation.FrameworkDescription,
             Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             Width = 480, Height = 336, FixedDelta = World.FixedDelta,
@@ -118,5 +119,5 @@ public static class Benchmarks
         double WallMillisecondsPerStep, double CpuMillisecondsPerStep,
         double MedianMillisecondsPerStep, double P95MillisecondsPerStep,
         long AllocatedBytesPerStep, int Particles, double Mass, double Energy,
-        int VaporParticles, double? SurfaceBowlDepthCells);
+        int VaporParticles, double? SurfaceBowlDepthCells, int AirVolumes, int AirOpenFaces);
 }

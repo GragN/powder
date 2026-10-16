@@ -409,6 +409,7 @@ public static partial class SelfTests
         });
         RunAtmosphereTests();
         RunAirPocketTests();
+        RunFiniteVolumeAirTests();
         RunLiquidTests();
         RunLiquidSolverTests();
         RunVaporizationTests();
