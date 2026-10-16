@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Numerics;
 using Raylib_cs;
 using static Raylib_cs.Raylib;
@@ -8,12 +7,13 @@ namespace Powder;
 public sealed class SandboxApp
 {
     public const int GridWidth = 480, GridHeight = 336;
-    private const int WindowWidth = 1280, WindowHeight = 800, CanvasX = 16, CanvasY = 96;
-    private static readonly Color Background = new(12, 17, 25, 255);
-    private static readonly Color Panel = new(21, 29, 41, 255);
-    private static readonly Color Border = new(43, 55, 72, 255);
-    private static readonly Color Ink = new(224, 232, 241, 255);
-    private static readonly Color Muted = new(135, 151, 172, 255);
+    private const int WindowWidth = 1280, WindowHeight = 800, CanvasX = 16, CanvasY = 64;
+    private static readonly Color Background = new(20, 22, 26, 255);
+    private static readonly Color CanvasBackground = new(13, 15, 18, 255);
+    private static readonly Color Panel = new(27, 30, 35, 255);
+    private static readonly Color Border = new(44, 48, 55, 255);
+    private static readonly Color Ink = new(224, 226, 231, 255);
+    private static readonly Color Muted = new(132, 138, 148, 255);
     private static readonly Color Accent = new(105, 225, 199, 255);
     private static readonly (double T, Color C)[] HeatStops =
     [
@@ -26,13 +26,12 @@ public sealed class SandboxApp
     private Element selected = Element.Sand;
     private Font font;
     private Texture2D texture;
-    private bool paused, thermal, help, showLabels = true, painting;
+    private bool paused, thermal, help, showProperties, painting;
     private int radius = 5, speed = 1, tool; // 0: matter, 1: heat, 2: cool
     private Vector2 previous;
-    private string toast = "Welcome to your particle laboratory.";
-    private double toastUntil = 5;
+    private string toast = "";
+    private double toastUntil;
     private double accumulator;
-    private double stepMilliseconds;
     private (double Mass, double Energy, int Particles) stats;
     private string scenePath = WorldFile.DefaultPath;
     private string? pendingAction;
@@ -61,8 +60,9 @@ public sealed class SandboxApp
             texture = LoadTextureFromImage(image);
             UnloadImage(image);
             SetTextureFilter(texture, TextureFilter.Point);
-            Scenes.Demo(world);
             stats = world.Statistics();
+            if (smoke && stats.Particles != 0)
+                throw new InvalidOperationException("Startup canvas must be empty.");
             int frame = 0;
             while (!WindowShouldClose())
             {
@@ -70,14 +70,14 @@ public sealed class SandboxApp
                 if (smoke) SmokeActions(frame);
                 double dt = Math.Min(GetFrameTime(), .1);
                 accumulator = paused ? 0 : Math.Min(accumulator + dt * speed, World.FixedDelta * 8);
-                var watch = Stopwatch.StartNew();
                 while (accumulator >= World.FixedDelta)
                 {
                     world.Step(); accumulator -= World.FixedDelta;
                 }
-                stepMilliseconds = watch.Elapsed.TotalMilliseconds;
                 if (frame % 15 == 0) stats = world.Statistics();
                 RenderPixels();
+                if (smoke && frame == 0 && pixels.Any(c => !c.Equals(CanvasBackground)))
+                    throw new InvalidOperationException("Startup canvas must have a plain background.");
                 BeginDrawing();
                 ClearBackground(Background);
                 Header();
@@ -105,7 +105,7 @@ public sealed class SandboxApp
                     {
                         if (!File.Exists(scenePath) || !thermal || !paused || tool != 0)
                             throw new InvalidOperationException("UI smoke actions did not complete.");
-                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; palette, painting, heat, pause, thermal view, save/load.");
+                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear.");
                     }
                     break;
                 }
@@ -148,7 +148,7 @@ public sealed class SandboxApp
         if (IsKeyPressed(KeyboardKey.Space)) paused = !paused;
         if (IsKeyPressed(KeyboardKey.N)) { paused = true; world.Step(); }
         if (IsKeyPressed(KeyboardKey.T)) thermal = !thermal;
-        if (IsKeyPressed(KeyboardKey.G)) showLabels = !showLabels;
+        if (IsKeyPressed(KeyboardKey.I)) showProperties = !showProperties;
         if (IsKeyPressed(KeyboardKey.B)) tool = 0;
         if (IsKeyPressed(KeyboardKey.H)) tool = 1;
         if (IsKeyPressed(KeyboardKey.J)) tool = 2;
@@ -197,32 +197,64 @@ public sealed class SandboxApp
         else world.HeatBrush(x, y, radius, tool == 1 ? 8 : -8);
     }
 
-    private void Click(Vector2 p)
+    private enum Control
     {
-        bool Hit(int x, int y, int w, int h) => CheckCollisionPointRec(p, new(x, y, w, h));
-        if (Hit(16, 62, 94, 25)) paused = !paused;
-        if (Hit(118, 62, 74, 25)) { paused = true; world.Step(); }
-        if (Hit(200, 62, 83, 25)) pendingAction = "clear";
-        if (Hit(291, 62, 95, 25)) pendingAction = "demo";
-        if (Hit(395, 62, 76, 25)) speed = speed == 1 ? 2 : speed == 2 ? 4 : 1;
-        if (Hit(754, 62, 107, 25)) thermal = false;
-        if (Hit(869, 62, 107, 25)) thermal = true;
-        if (Hit(1199, 20, 65, 27)) help = !help;
-        for (int i = 0; i < 15; i++)
-            if (Hit(1006 + (i % 3) * 80, 145 + (i / 3) * 47, 74, 40))
-            { selected = (Element)(i == 14 ? 0 : i + 1); tool = 0; }
-        if (Hit(1006, 606, 74, 31)) tool = 0;
-        if (Hit(1086, 606, 74, 31)) tool = 1;
-        if (Hit(1166, 606, 74, 31)) tool = 2;
-        if (Hit(1006, 651, 30, 26)) radius = Math.Max(1, radius - 1);
-        if (Hit(1214, 651, 30, 26)) radius = Math.Min(30, radius + 1);
-        if (Hit(1006, 694, 115, 29)) Save();
-        if (Hit(1129, 694, 115, 29)) Load();
-        if (Hit(1006, 738, 238, 22))
+        Pause, Step, Clear, Speed, Thermal, Save, Load, Help,
+        Draw, Heat, Cool, Smaller, Larger, Properties, AirCooling
+    }
+
+    private static Rectangle Bounds(Control control) => control switch
+    {
+        Control.Pause => new(224, 18, 80, 28),
+        Control.Step => new(312, 18, 56, 28),
+        Control.Clear => new(376, 18, 64, 28),
+        Control.Speed => new(448, 18, 56, 28),
+        Control.Thermal => new(512, 18, 112, 28),
+        Control.Save => new(1040, 18, 64, 28),
+        Control.Load => new(1112, 18, 64, 28),
+        Control.Help => new(1184, 18, 80, 28),
+        Control.Draw => new(1000, 408, 80, 30),
+        Control.Heat => new(1088, 408, 80, 30),
+        Control.Cool => new(1176, 408, 80, 30),
+        Control.Smaller => new(1000, 452, 30, 28),
+        Control.Larger => new(1226, 452, 30, 28),
+        Control.Properties => new(1000, 502, 116, 28),
+        Control.AirCooling => new(1000, 662, 256, 28),
+        _ => throw new ArgumentOutOfRangeException(nameof(control))
+    };
+
+    private static Rectangle MaterialBounds(int index)
+        => new(1000 + index % 2 * 132, 100 + index / 2 * 32, 124, 28);
+
+    private void Click(Vector2 point)
+    {
+        foreach (Control control in Enum.GetValues<Control>())
         {
-            world.AmbientCooling = !world.AmbientCooling;
-            Notify(world.AmbientCooling ? "Air cooling enabled: ambient temperature 20 C." : "Air cooling disabled. Neighbor heat exchange stays active.");
+            if (control == Control.AirCooling && !showProperties) continue;
+            if (!CheckCollisionPointRec(point, Bounds(control))) continue;
+            switch (control)
+            {
+                case Control.Pause: paused = !paused; break;
+                case Control.Step: paused = true; world.Step(); break;
+                case Control.Clear: pendingAction = "clear"; break;
+                case Control.Speed: speed = speed == 1 ? 2 : speed == 2 ? 4 : 1; break;
+                case Control.Thermal: thermal = !thermal; break;
+                case Control.Save: Save(); break;
+                case Control.Load: Load(); break;
+                case Control.Help: help = !help; break;
+                case Control.Draw: tool = 0; break;
+                case Control.Heat: tool = 1; break;
+                case Control.Cool: tool = 2; break;
+                case Control.Smaller: radius = Math.Max(1, radius - 1); break;
+                case Control.Larger: radius = Math.Min(30, radius + 1); break;
+                case Control.Properties: showProperties = !showProperties; break;
+                case Control.AirCooling: world.AmbientCooling = !world.AmbientCooling; break;
+            }
+            return;
         }
+        for (int i = 0; i < 15; i++)
+            if (CheckCollisionPointRec(point, MaterialBounds(i)))
+            { selected = (Element)(i == 14 ? 0 : i + 1); tool = 0; return; }
     }
 
     private void Save()
@@ -247,110 +279,87 @@ public sealed class SandboxApp
 
     private void Header()
     {
-        DrawRectangle(19, 20, 10, 10, Accent);
-        DrawRectangle(32, 20, 10, 10, new(78, 151, 151, 255));
-        DrawRectangle(19, 33, 10, 10, new(78, 151, 151, 255));
-        DrawRectangle(32, 33, 10, 10, Accent);
-        Text("POWDER LAB", 54, 15, 24, Ink);
-        Text("MATTER IN MOTION", 247, 25, 11, Muted);
-        Pill(1026, 23, "EARLY ACCESS  /  0.1", Accent);
-        Button(new(1199, 20, 65, 27), "?  Help", false);
-        Button(new(16, 62, 94, 25), paused ? ">  Resume" : "II  Pause", paused);
-        Button(new(118, 62, 74, 25), "Step  >", false);
-        Button(new(200, 62, 83, 25), "Clear", false);
-        Button(new(291, 62, 95, 25), "Load demo", false);
-        Button(new(395, 62, 76, 25), $"{speed}x speed", speed != 1);
-        Text(paused ? "SIMULATION PAUSED" : "LIVE SIMULATION", 493, 69, 10, paused ? Muted : Accent);
-        Button(new(754, 62, 107, 25), "Material", !thermal);
-        Button(new(869, 62, 107, 25), "Temperature", thermal);
-        Text("MATERIALS", 1006, 111, 13, Ink);
-        Text("14 elements", 1158, 113, 10, Muted);
+        DrawRectangle(16, 25, 6, 14, Accent);
+        Text("Powder Lab", 32, 22, 20, Ink);
+        ControlButton(Control.Pause, paused ? "Resume" : "Pause", paused);
+        ControlButton(Control.Step, "Step");
+        ControlButton(Control.Clear, "Clear");
+        ControlButton(Control.Speed, $"{speed}x", speed != 1);
+        ControlButton(Control.Thermal, "Temperature", thermal);
+        ControlButton(Control.Save, "Save");
+        ControlButton(Control.Load, "Load");
+        ControlButton(Control.Help, "Help  F1");
     }
 
     private void Canvas()
     {
         DrawTextureEx(texture, new(CanvasX, CanvasY), 0, 2, Color.White);
         DrawRectangleLines(CanvasX - 1, CanvasY - 1, GridWidth * 2 + 2, GridHeight * 2 + 2, Border);
-        if (showLabels)
-        {
-            SceneLabel(39, "01", "DENSITY & GRAVITY", "sand / oil / water");
-            SceneLabel(368, "02", "THERMAL BRIDGE", "copper / lava / water");
-            SceneLabel(704, "03", "COMBUSTION", "wood / fire / smoke");
-        }
-        if (thermal)
-        {
-            DrawRectangle(35, 699, 250, 50, new(12, 17, 25, 230));
-            Text("TEMPERATURE  /  C", 46, 706, 10, Ink);
-            for (int i = 0; i < 220; i++) DrawRectangle(46 + i, 725, 1, 5, HeatColor(-40 + i / 219.0 * 1540));
-            Text("-40", 46, 735, 9, Muted); Text("100", 125, 735, 9, Muted); Text("1500+", 231, 735, 9, Muted);
-        }
-        if (paused) Pill(847, 111, "PAUSED", Accent);
-        Vector2 m = GetMousePosition();
-        if (InCanvas(m) && !help && pendingAction is null)
-        {
-            int x = (int)(m.X - CanvasX) / 2, y = (int)(m.Y - CanvasY) / 2;
-            DrawCircleLines(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1, radius * 2, new(230, 240, 250, 160));
-            var p = world.At(x, y);
-            string detail = p.Element == Element.Empty ? $"EMPTY   [{x}, {y}]"
-                : $"{Materials.Get(p.Element).Name.ToUpperInvariant()}   {p.Temperature:F1} C   {p.Mass * 1000:F3} g   [{x}, {y}]";
-            float width = MeasureTextEx(font, detail, 12, 0).X + 24;
-            float tx = Math.Clamp(m.X + 18, CanvasX + 4, CanvasX + GridWidth * 2 - width - 4);
-            float ty = Math.Clamp(m.Y + 20, CanvasY + 4, CanvasY + GridHeight * 2 - 32);
-            DrawRectangleRounded(new(tx, ty, width, 28), .2f, 4, new(29, 41, 54, 245));
-            Text(detail, tx + 12, ty + 7, 12, Ink);
-        }
+        Vector2 mouse = GetMousePosition();
+        if (!InCanvas(mouse) || help || pendingAction is not null) return;
+        int x = (int)(mouse.X - CanvasX) / 2, y = (int)(mouse.Y - CanvasY) / 2;
+        DrawCircleLines(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1, radius * 2, new(220, 224, 230, 130));
+        var particle = world.At(x, y);
+        if (particle.Element == Element.Empty) return;
+        string detail = $"{Materials.Get(particle.Element).Name}   {particle.Temperature:F1} C   {particle.Mass * 1000:F3} g";
+        float width = MeasureTextEx(font, detail, 12, 0).X + 24;
+        float tx = Math.Clamp(mouse.X + 18, CanvasX + 4, CanvasX + GridWidth * 2 - width - 4);
+        float ty = Math.Clamp(mouse.Y + 20, CanvasY + 4, CanvasY + GridHeight * 2 - 32);
+        DrawRectangleRounded(new(tx, ty, width, 28), .15f, 4, Panel);
+        Text(detail, tx + 12, ty + 7, 12, Ink);
     }
 
     private void Sidebar()
     {
-        DrawRectangleRounded(new(992, 135, 272, 252), .04f, 4, Panel);
+        Text("Materials", 1000, 72, 13, Muted);
         for (int i = 0; i < 15; i++)
         {
-            Element e = (Element)(i == 14 ? 0 : i + 1);
-            var mat = Materials.Get(e);
-            int x = 1006 + i % 3 * 80, y = 145 + i / 3 * 47;
-            bool active = selected == e && tool == 0;
-            Color c = new(mat.Color.R, mat.Color.G, mat.Color.B, (byte)255);
-            DrawRectangleRounded(new(x, y, 74, 40), .15f, 4,
-                active ? new(42, 65, 71, 255) : Hover(new(x, y, 74, 40)) ? new(42, 52, 67, 255) : new(30, 40, 54, 255));
-            if (active) DrawRectangleRoundedLinesEx(new(x, y, 74, 40), .15f, 4, 1, Accent);
-            DrawRectangle(x + 8, y + 9, 7, 7, c);
-            Text(mat.Name, x + 8, y + 23, 10, active ? Accent : Ink);
-            if (i < 9) Text((i + 1).ToString(), x + 58, y + 8, 9, Muted);
+            Element element = (Element)(i == 14 ? 0 : i + 1);
+            var material = Materials.Get(element);
+            Rectangle bounds = MaterialBounds(i);
+            bool active = selected == element && tool == 0;
+            if (active || Hover(bounds))
+                DrawRectangleRounded(bounds, .15f, 4, active ? new(37, 52, 49, 255) : Panel);
+            Color color = new(material.Color.R, material.Color.G, material.Color.B, (byte)255);
+            if (element == Element.Empty)
+                DrawRectangleLines((int)bounds.X + 10, (int)bounds.Y + 10, 8, 8, Muted);
+            else DrawRectangle((int)bounds.X + 10, (int)bounds.Y + 10, 8, 8, color);
+            Text(material.Name, bounds.X + 28, bounds.Y + 7, 13, active ? Accent : Ink);
         }
+        DrawLine(1000, 376, 1256, 376, Border);
+        Text("Brush", 1000, 388, 12, Muted);
+        ControlButton(Control.Draw, "Draw", tool == 0);
+        ControlButton(Control.Heat, "Heat", tool == 1);
+        ControlButton(Control.Cool, "Cool", tool == 2);
+        ControlButton(Control.Smaller, "-");
+        string size = $"{radius * 2 + 1} cells";
+        float sizeWidth = MeasureTextEx(font, size, 12, 0).X;
+        Text(size, 1128 - sizeWidth / 2, 460, 12, Ink);
+        ControlButton(Control.Larger, "+");
+        ControlButton(Control.Properties, "Properties  I", showProperties);
+        if (!showProperties) return;
         var selectedMaterial = Materials.Get(selected);
-        DrawRectangleRounded(new(992, 401, 272, 173), .05f, 4, Panel);
-        Text("MATERIAL PROPERTIES", 1006, 415, 10, Muted);
-        var swatch = selectedMaterial.Color;
-        DrawRectangle(1006, 441, 12, 12, new(swatch.R, swatch.G, swatch.B, (byte)255));
-        Text(selectedMaterial.Name, 1026, 436, 20, Ink);
-        Text(selectedMaterial.State.ToString().ToUpperInvariant(), 1171, 443, 9, Accent);
-        Property("Density", $"{selectedMaterial.Density:N0} kg/m3", 470);
-        Property("Heat capacity", $"{selectedMaterial.SpecificHeat:N0} J/kg K", 492);
-        Property("Conductivity", $"{selectedMaterial.Conductivity:0.###} W/m K", 514);
-        Wrapped(selectedMaterial.Description, 1006, 542, 242, 10, Muted);
-        Text("INSTRUMENTS", 1006, 589, 11, Muted);
-        Button(new(1006, 606, 74, 31), "B  Draw", tool == 0);
-        Button(new(1086, 606, 74, 31), "H  Heat", tool == 1);
-        Button(new(1166, 606, 74, 31), "J  Cool", tool == 2);
-        Button(new(1006, 651, 30, 26), "-", false);
-        Text($"Brush  {radius * 2 + 1} cells", 1051, 658, 12, Ink);
-        Button(new(1214, 651, 30, 26), "+", false);
-        Button(new(1006, 694, 115, 29), "Save  Ctrl+S", false);
-        Button(new(1129, 694, 115, 29), "Load  Ctrl+O", false);
-        DrawRectangle(1006, 742, 12, 12, world.AmbientCooling ? Accent : Border);
-        Text("Ambient cooling  /  20 C", 1026, 741, 11, Muted);
+        Text(selectedMaterial.Name, 1000, 547, 16, Ink);
+        Property("Density", $"{selectedMaterial.Density:N0} kg/m3", 577);
+        Property("Heat capacity", $"{selectedMaterial.SpecificHeat:N0} J/kg K", 600);
+        Property("Conductivity", $"{selectedMaterial.Conductivity:0.###} W/m K", 623);
+        ControlButton(Control.AirCooling, "Ambient cooling / 20 C", world.AmbientCooling);
+        Wrapped(selectedMaterial.Description, 1000, 704, 256, 11, Muted);
     }
 
     private void Footer()
     {
-        Text($"{stats.Particles:N0} particles", 16, 779, 11, Ink);
-        Text($"{stats.Mass * 1000:N1} g", 156, 779, 11, Muted);
-        Text($"{GetFPS()} fps", 272, 779, 11, Muted);
-        Text($"physics {stepMilliseconds:F1} ms", 336, 779, 11, Muted);
-        Text("2 x 2 px", 462, 779, 11, Accent);
-        if (GetTime() < toastUntil) Text(toast, 560, 779, 10, Accent);
-        else Text("LMB draw   RMB erase   MMB pick   Wheel size   Space pause   F1 help", 560, 779, 10, Muted);
+        Text($"{stats.Particles:N0} particles", 16, 753, 11, Muted);
+        if (stats.Particles > 0) Text($"{stats.Mass * 1000:N1} g", 156, 753, 11, Muted);
+        Text($"{GetFPS()} fps", 924, 753, 11, Muted);
+        if (thermal)
+        {
+            Text("-40", 648, 753, 10, Muted);
+            for (int i = 0; i < 128; i++) DrawRectangle(678 + i, 756, 1, 4, HeatColor(-40 + i / 127.0 * 1540));
+            Text("1500+ C", 814, 753, 10, Muted);
+        }
+        if (GetTime() < toastUntil) Text(toast, 16, 778, 11, Accent);
+        else Text("LMB draw   /   RMB erase   /   Scroll brush size   /   Space pause", 16, 778, 11, Muted);
     }
 
     private void RenderPixels()
@@ -360,8 +369,7 @@ public sealed class SandboxApp
             ref readonly var p = ref world.Cells[i];
             if (p.Element == Element.Empty)
             {
-                pixels[i] = i % GridWidth % 16 == 0 && i / GridWidth % 16 == 0
-                    ? new(29, 39, 52, 255) : new(13, 20, 30, 255);
+                pixels[i] = CanvasBackground;
                 continue;
             }
             if (thermal) { pixels[i] = HeatColor(p.Temperature); continue; }
@@ -399,12 +407,6 @@ public sealed class SandboxApp
         (byte)(a.R + (b.R - a.R) * t), (byte)(a.G + (b.G - a.G) * t),
         (byte)(a.B + (b.B - a.B) * t), (byte)255);
 
-    private void SceneLabel(int x, string n, string title, string subtitle)
-    {
-        Text(n, x, 120, 10, Accent); Text(title, x + 24, 119, 12, Muted);
-        Text(subtitle, x + 24, 138, 10, new(87, 105, 126, 255));
-    }
-
     private void HelpOverlay()
     {
         DrawRectangle(0, 0, WindowWidth, WindowHeight, new(0, 0, 0, 185));
@@ -416,7 +418,7 @@ public sealed class SandboxApp
             "B: draw     H: heat     J: cool     1-9: quick material selection",
             "Space: pause     N: single step     T: temperature view",
             "Ctrl+S: save scene     Ctrl+O: load scene",
-            "C: clear canvas     R: demo scene     G: hide scene labels",
+            "C: clear canvas     R: load demo     I: material properties",
             "F1 or Esc: close this guide"];
         for (int i = 0; i < lines.Length; i++) Text(lines[i], 367, 274 + i * 31, 13, Ink);
         Wrapped("Try heating water, melting ice, dropping sand into a liquid, or igniting wood. Hover over matter to inspect its mass and temperature.",
@@ -436,25 +438,20 @@ public sealed class SandboxApp
 
     private void Property(string name, string value, int y)
     {
-        Text(name, 1006, y, 11, Muted);
+        Text(name, 1000, y, 11, Muted);
         float width = MeasureTextEx(font, value, 11, 0).X;
-        Text(value, 1244 - width, y, 11, Ink);
+        Text(value, 1256 - width, y, 11, Ink);
     }
+
+    private void ControlButton(Control control, string label, bool active = false)
+        => Button(Bounds(control), label, active);
 
     private void Button(Rectangle r, string label, bool active)
     {
-        DrawRectangleRounded(r, .18f, 4, active ? new(39, 69, 69, 255)
-            : Hover(r) ? new(45, 57, 74, 255) : new(28, 38, 52, 255));
-        if (active) DrawRectangleRoundedLinesEx(r, .18f, 4, 1, new(67, 126, 118, 255));
+        DrawRectangleRounded(r, .15f, 4, active ? new(37, 52, 49, 255)
+            : Hover(r) ? new(38, 42, 49, 255) : Panel);
         Vector2 size = MeasureTextEx(font, label, 11, 0);
         Text(label, r.X + (r.Width - size.X) / 2, r.Y + (r.Height - size.Y) / 2, 11, active ? Accent : Ink);
-    }
-
-    private void Pill(int x, int y, string text, Color c)
-    {
-        Vector2 size = MeasureTextEx(font, text, 9, 0);
-        DrawRectangleRounded(new(x, y, size.X + 18, 21), .2f, 4, new(26, 46, 46, 255));
-        Text(text, x + 9, y + 6, 9, c);
     }
 
     private void Wrapped(string text, int x, int y, int width, int size, Color color)
@@ -486,22 +483,64 @@ public sealed class SandboxApp
 
     private void SmokeActions(int frame)
     {
-        if (frame == 5) { Click(new(1095, 155)); Paint(110, 30); }
-        if (frame == 10) { Click(new(1095, 615)); Paint(110, 30); }
-        if (frame == 15) { Click(new(1015, 615)); Paint(140, 30); }
-        if (frame == 20) Click(new(900, 72));
+        void Press(Control control)
+        {
+            Rectangle bounds = Bounds(control);
+            Click(new(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
+        }
+        void Pick(int index)
+        {
+            Rectangle bounds = MaterialBounds(index);
+            Click(new(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
+        }
+        if (frame == 5)
+        {
+            Pick(1); Paint(140, 30);
+            if (selected != Element.Water || world.Count == 0)
+                throw new InvalidOperationException("Material selection or painting failed.");
+        }
+        if (frame == 10)
+        {
+            Pick(7); Paint(110, 30);
+            double before = world.At(110, 30).Temperature;
+            Press(Control.Heat); Paint(110, 30);
+            if (world.At(110, 30).Temperature <= before)
+                throw new InvalidOperationException("Heat brush failed.");
+        }
+        if (frame == 15)
+        {
+            Press(Control.Draw); Paint(170, 30); Paint(170, 30, true);
+            if (world.At(170, 30).Element != Element.Empty)
+                throw new InvalidOperationException("Erase brush failed.");
+        }
+        if (frame == 20) Press(Control.Thermal);
         if (frame == 30)
         {
-            Click(new(1030, 705)); smokeSavedMass = world.Statistics().Mass;
+            Press(Control.Save); smokeSavedMass = world.Statistics().Mass;
         }
         if (frame == 35)
         {
-            Paint(130, 30, true);
-            Click(new(240, 72)); ConfirmAction();
-            Click(new(1150, 705));
+            Press(Control.Clear); ConfirmAction();
+            if (world.Count != 0) throw new InvalidOperationException("Clear canvas failed.");
+            Press(Control.Load);
             if (Math.Abs(world.Statistics().Mass - smokeSavedMass) > 1e-12)
                 throw new InvalidOperationException("UI failed to restore the saved scene.");
         }
-        if (frame == 50) Click(new(60, 72));
+        if (frame == 40)
+        {
+            Press(Control.Properties);
+            if (!showProperties) throw new InvalidOperationException("Properties panel failed to open.");
+            Press(Control.AirCooling);
+            if (world.AmbientCooling) throw new InvalidOperationException("Air cooling toggle failed.");
+        }
+        if (frame == 50) Press(Control.Pause);
+        if (frame == 55)
+        {
+            long before = world.Tick;
+            Press(Control.Step);
+            if (!paused || world.Tick != before + 1)
+                throw new InvalidOperationException("Single step failed.");
+            Press(Control.Properties);
+        }
     }
 }
