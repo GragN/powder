@@ -289,6 +289,18 @@ public sealed class SandboxApp
         ControlButton(Control.Save, "Save");
         ControlButton(Control.Load, "Load");
         ControlButton(Control.Help, "Help  F1");
+
+        Particle particle = default;
+        Vector2 mouse = GetMousePosition();
+        if (InCanvas(mouse) && !help && pendingAction is null)
+            particle = world.At((int)(mouse.X - CanvasX) / 2, (int)(mouse.Y - CanvasY) / 2);
+        bool hasParticle = particle.Element != Element.Empty;
+        Text("Under cursor", 648, 14, 9, Muted);
+        Text("Temperature", 788, 14, 9, Muted);
+        Text("Mass", 916, 14, 9, Muted);
+        Text(hasParticle ? Materials.Get(particle.Element).Name : "--", 648, 30, 12, Ink);
+        Text(hasParticle ? $"{particle.Temperature:F1} C" : "--", 788, 30, 12, Ink);
+        Text(hasParticle ? $"{particle.Mass * 1000:F3} g" : "--", 916, 30, 12, Ink);
     }
 
     private void Canvas()
@@ -299,14 +311,6 @@ public sealed class SandboxApp
         if (!InCanvas(mouse) || help || pendingAction is not null) return;
         int x = (int)(mouse.X - CanvasX) / 2, y = (int)(mouse.Y - CanvasY) / 2;
         DrawCircleLines(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1, radius * 2, new(220, 224, 230, 130));
-        var particle = world.At(x, y);
-        if (particle.Element == Element.Empty) return;
-        string detail = $"{Materials.Get(particle.Element).Name}   {particle.Temperature:F1} C   {particle.Mass * 1000:F3} g";
-        float width = MeasureTextEx(font, detail, 12, 0).X + 24;
-        float tx = Math.Clamp(mouse.X + 18, CanvasX + 4, CanvasX + GridWidth * 2 - width - 4);
-        float ty = Math.Clamp(mouse.Y + 20, CanvasY + 4, CanvasY + GridHeight * 2 - 32);
-        DrawRectangleRounded(new(tx, ty, width, 28), .15f, 4, Panel);
-        Text(detail, tx + 12, ty + 7, 12, Ink);
     }
 
     private void Sidebar()
@@ -542,5 +546,6 @@ public sealed class SandboxApp
                 throw new InvalidOperationException("Single step failed.");
             Press(Control.Properties);
         }
+        if (frame == 60) SetMousePosition(CanvasX + 110 * 2 + 1, CanvasY + 30 * 2 + 1);
     }
 }
