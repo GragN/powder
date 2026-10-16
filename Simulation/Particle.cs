@@ -9,7 +9,9 @@ public struct Particle
     public double DissolvedSalt; // kg, included in Mass
     public double EnthalpyOffset; // J/kg, energy reference retained when sand becomes glass
     public double VelocityY;     // cells / second
+    public double VelocityX;     // gases follow the air; condensed droplets retain inertia
     public double Travel;        // fractional cells
+    public double TravelX;
     public float Life;
     public uint Stamp;
     public byte Variation;

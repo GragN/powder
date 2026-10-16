@@ -11,10 +11,11 @@ public sealed partial class World
     public int Width { get; }
     public int Height { get; }
     public Particle[] Cells { get; }
-    public bool AmbientCooling { get; set; } = true;
-    public double AmbientTemperature { get; set; } = 20;
+    public bool AtmosphereEnabled { get; set; } = true;
+    public AirField Air { get; }
     public long Tick { get; private set; }
     public double EscapedMass { get; private set; }
+    public double EscapedEnergy { get; private set; }
     public double ExternalEnergy { get; private set; }
     public int Count => Cells.Count(p => p.Element != Element.Empty);
     private Random random;
@@ -25,6 +26,7 @@ public sealed partial class World
         if (width < 8 || height < 8) throw new ArgumentOutOfRangeException(nameof(width));
         Width = width; Height = height;
         Cells = new Particle[width * height];
+        Air = new AirField(width, height);
         random = new Random(seed);
     }
 
@@ -50,7 +52,7 @@ public sealed partial class World
 
     public void Clear()
     {
-        Array.Clear(Cells); Tick = 0; stamp = 0; EscapedMass = 0; ExternalEnergy = 0;
+        Array.Clear(Cells); Air.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
         random = new Random(417);
     }
 
@@ -95,6 +97,7 @@ public sealed partial class World
     public void Step()
     {
         stamp++; Tick++;
+        if (AtmosphereEnabled) Air.UpdateObstacles(this);
         // Two smaller, alternating sweeps reduce splitting error without a stability cap on k.
         for (int substep = 0; substep < ThermalSubsteps; substep++)
         {
@@ -105,12 +108,7 @@ public sealed partial class World
                 if (Cells[i].Element == Element.Empty) continue;
                 if (i % Width + 1 < Width) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + 1], seconds);
                 if (i + Width < Cells.Length) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + Width], seconds);
-                if (AmbientCooling && Exposed(i))
-                {
-                    ref var p = ref Cells[i];
-                    ExternalEnergy += Thermodynamics.ExchangeWithReservoir(ref p, AmbientTemperature,
-                        12 * CellSize * Depth, seconds);
-                }
+                if (AtmosphereEnabled) Air.ExchangeSurface(this, i % Width, i / Width, seconds);
             }
         }
         // Bottom-up sweep plus stamps ensure a particle is moved at most once per tick.
@@ -125,12 +123,12 @@ public sealed partial class World
                 React(i, x, y);
                 Move(i, x, y);
             }
+        if (AtmosphereEnabled)
+        {
+            Air.UpdateObstacles(this);
+            Air.Step(FixedDelta);
+        }
     }
-
-    private bool Exposed(int i) => i < Width || i >= Cells.Length - Width || i % Width == 0
-        || i % Width == Width - 1 || Cells[i - 1].Element == Element.Empty
-        || Cells[i + 1].Element == Element.Empty || Cells[i - Width].Element == Element.Empty
-        || Cells[i + Width].Element == Element.Empty;
 
     private void React(int i, int x, int y)
     {
@@ -174,70 +172,16 @@ public sealed partial class World
         }
     }
 
-    private void Move(int i, int x, int y)
+    private void Escape(int index)
     {
-        Element e = Cells[i].Element;
-        MatterState state = Materials.Get(e).State;
-        if (state is MatterState.Empty or MatterState.Solid) return;
-        int direction = random.Next(2) == 0 ? -1 : 1;
-        if (state is MatterState.Gas or MatterState.Flame)
-        {
-            // Buoyancy with bounded diffusion. The top boundary vents gases.
-            if (y == 0)
-            {
-                EscapedMass += Cells[i].Mass; Cells[i] = default; return;
-            }
-            if (TryMove(i, x, y - 1, rising: true)) return;
-            if (TryMove(i, x + direction, y - 1, rising: true)) return;
-            if (random.Next(3) == 0) TryMove(i, x + direction, y, rising: true);
-            return;
-        }
-        ref var p = ref Cells[i];
-        double acceleration = Gravity / CellSize;
-        // Exact constant-acceleration displacement, with subcell travel retained across ticks.
-        double travelDistance = p.Travel + p.VelocityY * FixedDelta + .5 * acceleration * FixedDelta * FixedDelta;
-        p.VelocityY += acceleration * FixedDelta;
-        double wholeCells = Math.Floor(travelDistance);
-        p.Travel = travelDistance - wholeCells;
-        // The only traversal bound is the world edge; every crossed cell is collision-checked.
-        int steps = (int)Math.Clamp(wholeCells, 0, Height);
-        if (steps == 0) return;
-        int current = i, yy = y;
-        bool blocked = false;
-        for (int n = 0; n < steps; n++)
-        {
-            if (TryMove(current, x, yy + 1)) { yy++; current += Width; }
-            else
-            {
-                Cells[current].VelocityY = 0; Cells[current].Travel = 0;
-                blocked = true; break;
-            }
-        }
-        if (!blocked) return;
-        i = current; y = yy;
-        if (TryMove(i, x + direction, y + 1) || TryMove(i, x - direction, y + 1)) return;
-        if (state != MatterState.Liquid) return;
-        // Lateral search gives water rapid leveling; viscous lava flows more slowly.
-        if (e == Element.Lava && random.Next(3) != 0) return;
-        int range = e == Element.Oil ? 3 : e == Element.Lava ? 1 : 5;
-        for (int sign = 0; sign < 2; sign++)
-        {
-            int dir = sign == 0 ? direction : -direction;
-            for (int distance = 1; distance <= range; distance++)
-            {
-                int xx = x + distance * dir;
-                if (!Inside(xx, y) || At(xx, y).Element != Element.Empty) break;
-                if (distance == range || (y + 1 < Height && At(xx, y + 1).Element == Element.Empty))
-                {
-                    TryMove(i, xx, y); return;
-                }
-            }
-        }
+        EscapedMass += Cells[index].Mass; EscapedEnergy += Cells[index].Energy;
+        Cells[index] = default;
     }
 
     private bool TryMove(int from, int x, int y, bool rising = false)
     {
-        if (!Inside(x, y)) return false;
+        if (y >= Height) return false;
+        if (x < 0 || x >= Width || y < 0) { Escape(from); return true; }
         int to = y * Width + x;
         Element target = Cells[to].Element;
         if (target != Element.Empty)

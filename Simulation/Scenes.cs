@@ -2,6 +2,14 @@ namespace Powder;
 
 public static class Scenes
 {
+    public static void Convection(World w)
+    {
+        w.Clear();
+        Rect(w, 12, w.Height - 12, w.Width - 24, 4, Element.Stone);
+        Rect(w, w.Width / 2 - 20, w.Height - 24, 40, 8, Element.Copper, 500);
+        Rect(w, w.Width / 2 + 10, w.Height / 2, 90, 4, Element.Glass);
+    }
+
     public static void Demo(World w)
     {
         w.Clear();

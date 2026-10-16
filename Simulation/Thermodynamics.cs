@@ -119,7 +119,7 @@ public static class Thermodynamics
                 : p.Energy > boilStart && before == Element.Steam ? Element.Steam : Element.Water;
         }
         if (p.Element != before && Materials.Get(p.Element).State == MatterState.Solid)
-        { p.VelocityY = 0; p.Travel = 0; }
+        { p.VelocityX = p.VelocityY = 0; p.TravelX = p.Travel = 0; }
     }
 
     // The heat capacity and next energy boundary in the direction of heat flow.
@@ -188,22 +188,23 @@ public static class Thermodynamics
         return logarithm / (conductance * inverseCapacity);
     }
 
-    public static void Exchange(ref Particle a, ref Particle b, double seconds)
+    public static void Exchange(ref Particle a, ref Particle b, double seconds, double contactConductance = 0)
     {
         if (seconds <= 0 || a.Element == Element.Empty || b.Element == Element.Empty) return;
-        if (a.Temperature < b.Temperature) ExchangeColdHot(ref a, ref b, seconds);
-        else if (a.Temperature > b.Temperature) ExchangeColdHot(ref b, ref a, seconds);
+        double difference = b.Temperature - a.Temperature;
+        if (difference > 1e-10) ExchangeColdHot(ref a, ref b, seconds, contactConductance, difference);
+        else if (difference < -1e-10) ExchangeColdHot(ref b, ref a, seconds, contactConductance, -difference);
     }
 
-    private static void ExchangeColdHot(ref Particle cold, ref Particle hot, double seconds)
+    private static void ExchangeColdHot(ref Particle cold, ref Particle hot, double seconds, double contactConductance, double initialDifference)
     {
         for (int n = 0; n < 16 && seconds > 0; n++)
         {
-            double difference = hot.Temperature - cold.Temperature;
+            double difference = n == 0 ? initialDifference : hot.Temperature - cold.Temperature;
             if (difference <= 1e-10) return;
             double ka = Materials.Get(cold.Element).Conductivity, kb = Materials.Get(hot.Element).Conductivity;
             // Thermal resistances of the two half cells in series: G = k_harmonic A / dx.
-            double conductance = 2 * ka * kb / (ka + kb) * World.Depth;
+            double conductance = contactConductance > 0 ? contactConductance : 2 * ka * kb / (ka + kb) * World.Depth;
             if (conductance <= 0) return;
             var a = Segment(cold, true); var b = Segment(hot, false);
             double inverseCapacity = 1 / a.Capacity + 1 / b.Capacity;

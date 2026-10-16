@@ -2,7 +2,7 @@ namespace Powder;
 
 public enum Element : byte
 {
-    Empty, Sand, Water, Stone, Wood, Oil, Salt, Iron, Copper, Glass, Ice, Steam, Smoke, Fire, Lava
+    Empty, Sand, Water, Stone, Wood, Oil, Salt, Iron, Copper, Glass, Ice, Steam, Smoke, Fire, Lava, Air
 }
 
 public enum MatterState { Empty, Powder, Liquid, Solid, Gas, Flame }
@@ -32,7 +32,9 @@ public static class Materials
         new(Element.Steam, "Steam", MatterState.Gas, new(181, 202, 219), .598, 1996, .025, 120, "Hot vapor. Condenses after releasing latent heat."),
         new(Element.Smoke, "Smoke", MatterState.Gas, new(98, 106, 121), 1.2, 1000, .03, 130, "Buoyant combustion products. Cools in air."),
         new(Element.Fire, "Fire", MatterState.Flame, new(255, 155, 57), .3, 1100, .08, 900, "Short-lived ignition source. Heats nearby matter."),
-        new(Element.Lava, "Lava", MatterState.Liquid, new(247, 94, 48), 2600, 1200, 2.0, 1450, "Molten rock. Solidifies below 1200 C.")
+        new(Element.Lava, "Lava", MatterState.Liquid, new(247, 94, 48), 2600, 1200, 2.0, 1450, "Molten rock. Solidifies below 1200 C."),
+        new(Element.Air, "Air", MatterState.Gas, new(100, 130, 145), AirField.Density, AirField.SpecificHeat,
+            AirField.Conductivity, 20, "Continuum atmosphere; not a brush material.")
     ];
 
     public static Material Get(Element e) => All[(int)e];

@@ -26,7 +26,7 @@ public sealed class SandboxApp
     private Element selected = Element.Sand;
     private Font font;
     private Texture2D texture;
-    private bool paused, thermal, help, showProperties, painting;
+    private bool paused, thermal, help, showProperties, painting, showAirflow;
     private int radius = 5, speed = 1, tool; // 0: matter, 1: heat, 2: cool
     private Vector2 previous;
     private string toast = "";
@@ -60,6 +60,10 @@ public sealed class SandboxApp
             texture = LoadTextureFromImage(image);
             UnloadImage(image);
             SetTextureFilter(texture, TextureFilter.Point);
+            if (args.Contains("--air-demo"))
+            {
+                Scenes.Convection(world); thermal = true; showAirflow = true;
+            }
             stats = world.Statistics();
             if (smoke && stats.Particles != 0)
                 throw new InvalidOperationException("Startup canvas must be empty.");
@@ -149,6 +153,7 @@ public sealed class SandboxApp
         if (IsKeyPressed(KeyboardKey.N)) { paused = true; world.Step(); }
         if (IsKeyPressed(KeyboardKey.T)) thermal = !thermal;
         if (IsKeyPressed(KeyboardKey.I)) showProperties = !showProperties;
+        if (IsKeyPressed(KeyboardKey.A)) showAirflow = !showAirflow;
         if (IsKeyPressed(KeyboardKey.B)) tool = 0;
         if (IsKeyPressed(KeyboardKey.H)) tool = 1;
         if (IsKeyPressed(KeyboardKey.J)) tool = 2;
@@ -204,7 +209,7 @@ public sealed class SandboxApp
     private enum Control
     {
         Pause, Step, Clear, Speed, Thermal, Save, Load, Help,
-        Draw, Heat, Cool, Smaller, Larger, Properties, AirCooling
+        Draw, Heat, Cool, Smaller, Larger, Properties, Atmosphere, Airflow
     }
 
     private static Rectangle Bounds(Control control) => control switch
@@ -223,7 +228,8 @@ public sealed class SandboxApp
         Control.Smaller => new(1000, 452, 30, 28),
         Control.Larger => new(1226, 452, 30, 28),
         Control.Properties => new(1000, 502, 116, 28),
-        Control.AirCooling => new(1000, 662, 256, 28),
+        Control.Atmosphere => new(1000, 662, 256, 28),
+        Control.Airflow => new(1132, 502, 124, 28),
         _ => throw new ArgumentOutOfRangeException(nameof(control))
     };
 
@@ -234,7 +240,7 @@ public sealed class SandboxApp
     {
         foreach (Control control in Enum.GetValues<Control>())
         {
-            if (control == Control.AirCooling && !showProperties) continue;
+            if (control == Control.Atmosphere && !showProperties) continue;
             if (!CheckCollisionPointRec(point, Bounds(control))) continue;
             switch (control)
             {
@@ -252,7 +258,8 @@ public sealed class SandboxApp
                 case Control.Smaller: radius = Math.Max(1, radius - 1); break;
                 case Control.Larger: radius = Math.Min(30, radius + 1); break;
                 case Control.Properties: showProperties = !showProperties; break;
-                case Control.AirCooling: world.AmbientCooling = !world.AmbientCooling; break;
+                case Control.Atmosphere: world.AtmosphereEnabled = !world.AtmosphereEnabled; break;
+                case Control.Airflow: showAirflow = !showAirflow; break;
             }
             return;
         }
@@ -299,22 +306,48 @@ public sealed class SandboxApp
         if (InCanvas(mouse) && !help && pendingAction is null)
             particle = world.At((int)(mouse.X - CanvasX) / 2, (int)(mouse.Y - CanvasY) / 2);
         bool hasParticle = particle.Element != Element.Empty;
+        bool hasAir = !hasParticle && InCanvas(mouse) && !help && pendingAction is null && world.AtmosphereEnabled;
+        double airTemperature = hasAir ? world.Air.TemperatureAtFine((int)(mouse.X - CanvasX) / 2,
+            (int)(mouse.Y - CanvasY) / 2) : 20;
         Text("Under cursor", 648, 14, 9, Muted);
         Text("Temperature", 788, 14, 9, Muted);
         Text("Mass", 916, 14, 9, Muted);
-        Text(hasParticle ? Materials.Get(particle.Element).Name : "--", 648, 30, 12, Ink);
-        Text(hasParticle ? $"{particle.Temperature:F1} C" : "--", 788, 30, 12, Ink);
+        Text(hasParticle ? Materials.Get(particle.Element).Name : hasAir ? "Air" : "--", 648, 30, 12, Ink);
+        Text(hasParticle ? $"{particle.Temperature:F1} C" : hasAir ? $"{airTemperature:F1} C" : "--", 788, 30, 12, Ink);
         Text(hasParticle ? $"{particle.Mass * 1000:F3} g" : "--", 916, 30, 12, Ink);
     }
 
     private void Canvas()
     {
         DrawTextureEx(texture, new(CanvasX, CanvasY), 0, 2, Color.White);
-        DrawRectangleLines(CanvasX - 1, CanvasY - 1, GridWidth * 2 + 2, GridHeight * 2 + 2, Border);
+        DrawLine(CanvasX, CanvasY + GridHeight * 2 + 1, CanvasX + GridWidth * 2, CanvasY + GridHeight * 2 + 1, Border);
+        if (showAirflow && world.AtmosphereEnabled) DrawAirflow();
         Vector2 mouse = GetMousePosition();
         if (!InCanvas(mouse) || help || pendingAction is not null) return;
         int x = (int)(mouse.X - CanvasX) / 2, y = (int)(mouse.Y - CanvasY) / 2;
         DrawCircleLines(CanvasX + x * 2 + 1, CanvasY + y * 2 + 1, radius * 2, new(220, 224, 230, 130));
+    }
+
+    private void DrawAirflow()
+    {
+        var air = world.Air;
+        for (int y = 2; y < air.Height; y += 4)
+        for (int x = 2; x < air.Width; x += 4)
+        {
+            if (air.Blocked[y * air.Width + x]) continue;
+            var v = air.Velocity((x + .5) * air.Dx, (y + .5) * air.Dy);
+            var vector = new Vector2((float)v.X, (float)v.Y);
+            if (vector.LengthSquared() < .000025f) continue;
+            Vector2 start = new(CanvasX + (float)((x + .5) * air.Dx / World.CellSize * 2),
+                CanvasY + (float)((y + .5) * air.Dy / World.CellSize * 2));
+            Vector2 direction = Vector2.Normalize(vector);
+            Vector2 end = start + direction * Math.Min(18, vector.Length() * 40);
+            var color = new Color(130, 208, 195, 155);
+            DrawLineEx(start, end, 1, color);
+            var normal = new Vector2(-direction.Y, direction.X);
+            DrawLineEx(end, end - direction * 3 + normal * 2, 1, color);
+            DrawLineEx(end, end - direction * 3 - normal * 2, 1, color);
+        }
     }
 
     private void Sidebar()
@@ -345,13 +378,14 @@ public sealed class SandboxApp
         Text(size, 1128 - sizeWidth / 2, 460, 12, Ink);
         ControlButton(Control.Larger, "+");
         ControlButton(Control.Properties, "Properties  I", showProperties);
+        ControlButton(Control.Airflow, "Airflow  A", showAirflow);
         if (!showProperties) return;
         var selectedMaterial = Materials.Get(selected);
         Text(selectedMaterial.Name, 1000, 547, 16, Ink);
         Property("Density", $"{selectedMaterial.Density:N0} kg/m3", 577);
         Property("Heat capacity", $"{selectedMaterial.SpecificHeat:N0} J/kg K", 600);
         Property("Conductivity", $"{selectedMaterial.Conductivity:0.###} W/m K", 623);
-        ControlButton(Control.AirCooling, "Ambient cooling / 20 C", world.AmbientCooling);
+        ControlButton(Control.Atmosphere, "Atmosphere", world.AtmosphereEnabled);
         Wrapped(selectedMaterial.Description, 1000, 704, 256, 11, Muted);
     }
 
@@ -377,7 +411,8 @@ public sealed class SandboxApp
             ref readonly var p = ref world.Cells[i];
             if (p.Element == Element.Empty)
             {
-                pixels[i] = CanvasBackground;
+                pixels[i] = thermal && world.AtmosphereEnabled
+                    ? HeatColor(world.Air.TemperatureAtFine(i % GridWidth, i / GridWidth)) : CanvasBackground;
                 continue;
             }
             if (thermal) { pixels[i] = HeatColor(p.Temperature); continue; }
@@ -424,7 +459,7 @@ public sealed class SandboxApp
         string[] lines = ["Left mouse: draw     Right mouse: erase     Middle mouse: pick",
             "Mouse wheel or [ / ]: change brush radius",
             "B: draw     H: heat     J: cool     1-9: quick material selection",
-            "Space: pause     N: single step     T: temperature view",
+            "Space: pause     N: single step     T: temperature     A: airflow",
             "Ctrl+S: save scene     Ctrl+O: load scene",
             "C: clear canvas     R: load demo     I: material properties",
             "F1 or Esc: close this guide"];
@@ -538,8 +573,8 @@ public sealed class SandboxApp
         {
             Press(Control.Properties);
             if (!showProperties) throw new InvalidOperationException("Properties panel failed to open.");
-            Press(Control.AirCooling);
-            if (world.AmbientCooling) throw new InvalidOperationException("Air cooling toggle failed.");
+            Press(Control.Atmosphere);
+            if (world.AtmosphereEnabled) throw new InvalidOperationException("Atmosphere toggle failed.");
         }
         if (frame == 50) Press(Control.Pause);
         if (frame == 55)
@@ -550,6 +585,12 @@ public sealed class SandboxApp
                 throw new InvalidOperationException("Single step failed.");
             Press(Control.Properties);
         }
-        if (frame == 60) SetMousePosition(CanvasX + 110 * 2 + 1, CanvasY + 30 * 2 + 1);
+        if (frame == 60)
+        {
+            Press(Control.Properties); Press(Control.Atmosphere); Press(Control.Properties);
+            Press(Control.Airflow);
+            if (!showAirflow || !world.AtmosphereEnabled) throw new InvalidOperationException("Air display failed.");
+            SetMousePosition(CanvasX + 110 * 2 + 1, CanvasY + 30 * 2 + 1);
+        }
     }
 }

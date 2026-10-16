@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace Powder;
 
-public static class SelfTests
+public static partial class SelfTests
 {
     private static int passed, failed;
 
@@ -16,7 +16,7 @@ public static class SelfTests
         });
         Test("gravity moves sand and conserves mass", () =>
         {
-            var w = new World(32, 32) { AmbientCooling = false };
+            var w = new World(32, 32) { AtmosphereEnabled = false };
             w.Set(10, 2, Element.Sand);
             double mass = w.Statistics().Mass;
             for (int n = 0; n < 90; n++) w.Step();
@@ -26,7 +26,7 @@ public static class SelfTests
         });
         Test("free fall follows v=gt and y=gt²/2 beyond the old speed limit", () =>
         {
-            var w = new World(16, 1024) { AmbientCooling = false };
+            var w = new World(16, 1024) { AtmosphereEnabled = false };
             w.Set(8, 2, Element.Sand);
             for (int n = 1; n <= 20; n++)
             {
@@ -43,7 +43,7 @@ public static class SelfTests
         });
         Test("different masses have the same free-fall acceleration", () =>
         {
-            var w = new World(32, 512) { AmbientCooling = false };
+            var w = new World(32, 512) { AtmosphereEnabled = false };
             w.Set(8, 2, Element.Sand); w.Set(24, 2, Element.Salt);
             for (int n = 0; n < 15; n++) w.Step();
             int a = Array.FindIndex(w.Cells, p => p.Element == Element.Sand);
@@ -54,7 +54,7 @@ public static class SelfTests
         });
         Test("fast particles cannot tunnel through a one-cell floor", () =>
         {
-            var w = new World(32, 96) { AmbientCooling = false };
+            var w = new World(32, 96) { AtmosphereEnabled = false };
             Scenes.Rect(w, 0, 20, 32, 1, Element.Stone);
             w.Set(8, 2, Element.Sand); w.At(8, 2).VelocityY = 10_000;
             double mass = w.Statistics().Mass;
@@ -81,8 +81,10 @@ public static class SelfTests
         });
         Test("liquid spreads into an open basin", () =>
         {
-            var w = new World(48, 24) { AmbientCooling = false };
+            var w = new World(48, 24) { AtmosphereEnabled = false };
             Scenes.Rect(w, 0, 22, 48, 2, Element.Stone);
+            Scenes.Rect(w, 0, 5, 1, 17, Element.Stone);
+            Scenes.Rect(w, 47, 5, 1, 17, Element.Stone);
             Scenes.Rect(w, 2, 10, 7, 12, Element.Water);
             for (int n = 0; n < 180; n++) w.Step();
             Check(w.Cells.Where((_, i) => i % w.Width > 30).Any(p => p.Element == Element.Water),
@@ -213,7 +215,7 @@ public static class SelfTests
             Near(cold.Temperature, 0, 1e-12); Near(hot.Temperature, 100, 1e-12);
             Near(cold.Energy + hot.Energy, energy, 1e-10);
         });
-        Test("ambient exchange also pays latent heat", () =>
+        Test("external-air boundary exchange also pays latent heat", () =>
         {
             var p = Make(Element.Ice, 0);
             p.Energy = p.Mass * Thermodynamics.Fusion * .5;
@@ -290,7 +292,7 @@ public static class SelfTests
             Check(p.Element == Element.Glass, "cooling tool did not make glass");
             Near(p.Energy - before, w.ExternalEnergy, 1e-10); Near(p.Mass, mass, 1e-15);
         });
-        Test("ambient cooling carries molten sand through solidification to room-temperature glass", () =>
+        Test("external-air boundary cooling carries molten sand through solidification to glass", () =>
         {
             var p = Make(Element.Sand, 1800);
             double mass = p.Mass, before = p.Energy;
@@ -301,7 +303,7 @@ public static class SelfTests
         });
         Test("closed two-dimensional heat flow conserves energy across phase changes", () =>
         {
-            var w = new World(32, 32) { AmbientCooling = false };
+            var w = new World(32, 32) { AtmosphereEnabled = false };
             Scenes.Rect(w, 0, 0, 32, 32, Element.Glass);
             Scenes.Rect(w, 7, 8, 8, 8, Element.Copper, 500);
             Scenes.Rect(w, 15, 8, 8, 8, Element.Ice, -20);
@@ -316,7 +318,7 @@ public static class SelfTests
         });
         Test("salt dissolution conserves mass and energy", () =>
         {
-            var w = new World(16, 16) { AmbientCooling = false };
+            var w = new World(16, 16) { AtmosphereEnabled = false };
             Scenes.Rect(w, 0, 0, 16, 16, Element.Glass);
             w.Set(8, 8, Element.Salt); w.Set(8, 9, Element.Water);
             var before = w.Statistics();
@@ -327,7 +329,7 @@ public static class SelfTests
         });
         Test("heated wood ignites and retains its mass", () =>
         {
-            var w = new World(16, 16) { AmbientCooling = false };
+            var w = new World(16, 16) { AtmosphereEnabled = false };
             w.Set(8, 8, Element.Wood, 450);
             double mass = w.Statistics().Mass;
             w.Step();
@@ -336,8 +338,8 @@ public static class SelfTests
         });
         Test("gas leaving the top is recorded in the mass budget", () =>
         {
-            var w = new World(16, 16) { AmbientCooling = false };
-            w.Set(8, 0, Element.Steam); double mass = w.Statistics().Mass;
+            var w = new World(16, 16) { AtmosphereEnabled = false };
+            w.Set(8, 0, Element.Steam); w.At(8, 0).VelocityY = -120; double mass = w.Statistics().Mass;
             w.Step(); Near(w.Statistics().Mass + w.EscapedMass, mass, 1e-15);
             Check(w.EscapedMass > 0, "top did not vent");
         });
@@ -346,7 +348,7 @@ public static class SelfTests
             string path = Path.Combine(Path.GetTempPath(), $"powder-test-{Guid.NewGuid()}.json");
             try
             {
-                var w = new World(32, 24) { AmbientCooling = false };
+                var w = new World(32, 24) { AtmosphereEnabled = false };
                 w.Set(3, 3, Element.Copper, 155); w.Set(5, 5, Element.Ice);
                 w.Set(10, 10, Element.Sand, 1800);
                 w.At(10, 10).Energy = w.At(10, 10).Mass * 830 * 1700;
@@ -356,7 +358,7 @@ public static class SelfTests
                 var restored = WorldFile.Load(path, 32, 24);
                 Near(w.Statistics().Mass, restored.Statistics().Mass, 1e-15);
                 Near(w.Statistics().Energy, restored.Statistics().Energy, 1e-12);
-                Check(!restored.AmbientCooling && restored.At(3, 3).VelocityY == 12, "state lost");
+                Check(!restored.AtmosphereEnabled && restored.At(3, 3).VelocityY == 12, "state lost");
                 Check(restored.At(10, 10).Element == Element.Glass, "glass composition lost");
                 Near(restored.At(10, 10).Temperature, w.At(10, 10).Temperature, 1e-10);
                 Near(restored.At(10, 10).EnthalpyOffset, w.At(10, 10).EnthalpyOffset, 1e-12);
@@ -380,7 +382,7 @@ public static class SelfTests
             string path = Path.Combine(Path.GetTempPath(), $"powder-fall-{Guid.NewGuid()}.json");
             try
             {
-                var w = new World(16, 512) { AmbientCooling = false };
+                var w = new World(16, 512) { AtmosphereEnabled = false };
                 w.Set(8, 2, Element.Sand);
                 for (int n = 0; n < 8; n++) w.Step();
                 WorldFile.Save(w, path);
@@ -402,16 +404,22 @@ public static class SelfTests
             for (int n = 0; n < 60; n++) { a.Step(); b.Step(); }
             Check(a.Cells.SequenceEqual(b.Cells), "determinism lost");
         });
+        RunAtmosphereTests();
         Test("full demo remains finite and conserves the mass budget", () =>
         {
             var w = new World(SandboxApp.GridWidth, SandboxApp.GridHeight);
             Scenes.Demo(w); double mass = w.Statistics().Mass;
+            double energy = Budget(w);
             var timer = Stopwatch.StartNew();
             for (int n = 0; n < 360; n++) w.Step();
             Near(w.Statistics().Mass + w.EscapedMass, mass, 1e-9);
+            Near(Budget(w), energy, 1e-6);
+            Check(w.Air.Heat.All(double.IsFinite) && w.Air.U.All(double.IsFinite) && w.Air.V.All(double.IsFinite),
+                "nonfinite atmospheric state");
+            Check(w.Air.DivergenceRms < .01, "full-scene air pressure projection did not converge");
             Check(w.Cells.All(p => double.IsFinite(p.Energy) && double.IsFinite(p.Temperature)
                 && p.Mass >= 0 && p.Temperature >= -273.151), "nonphysical numerical state");
-            Console.WriteLine($"  demo: {w.Count:N0} particles, 360 steps in {timer.Elapsed.TotalSeconds:F2}s");
+            Console.WriteLine($"  demo: {w.Count:N0} particles, 360 steps in {timer.Elapsed.TotalSeconds:F2}s; air divergence RMS {w.Air.DivergenceRms:F5}/s");
         });
         Console.WriteLine($"\n{passed} passed, {failed} failed. Headless physics and scene checks completed.");
         return failed == 0 ? 0 : 1;
@@ -419,7 +427,7 @@ public static class SelfTests
 
     private static World Tube()
     {
-        var w = new World(16, 20) { AmbientCooling = false };
+        var w = new World(16, 20) { AtmosphereEnabled = false };
         Scenes.Rect(w, 0, 0, 16, 20, Element.Glass);
         for (int y = 1; y < 18; y++) w.Set(8, y, Element.Empty);
         return w;
