@@ -5,6 +5,8 @@ namespace Powder;
 public sealed partial class AirField
 {
     private readonly List<PressureLink> pressureLinks = [];
+    private readonly List<PressurePoint> pressurePoints = [];
+    private readonly List<int> faceOrder = [];
 
     public void UpdateObstacles(World world)
     {
@@ -47,7 +49,11 @@ public sealed partial class AirField
             {
                 ref var node = ref newNodes[next];
                 node.Heat += q + trappedHeat[i]; trappedHeat[i] = 0;
-                if (old >= 0) { node.U += oldNodes[old].U; node.V += oldNodes[old].V; }
+                if (old >= 0)
+                {
+                    node.U += oldNodes[old].U; node.V += oldNodes[old].V;
+                    node.PressureGuess += pressure[old];
+                }
             }
             else trappedHeat[i] += q;
         }
@@ -67,18 +73,33 @@ public sealed partial class AirField
                 if (next >= 0) newNodes[next].Heat += q;
             }
         }
-        foreach (ref var node in newNodes) { node.U /= node.Pixels; node.V /= node.Pixels; }
+        foreach (ref var node in newNodes)
+        { node.U /= node.Pixels; node.V /= node.Pixels; node.PressureGuess /= node.Pixels; }
         (cells, nextCells) = (nextCells, cells); (cellAtFine, nextCellAtFine) = (nextCellAtFine, cellAtFine);
-        EnsureWorkspace(); Array.Clear(pressure);
-        faces.Clear(); faceLookup.Clear();
-        for (int y = 0; y < fineHeight; y++) for (int x = 0; x <= fineWidth; x++)
-            AddFace(VolumeIndexAtFine(x - 1, y), VolumeIndexAtFine(x, y), false, x, y);
-        for (int y = 0; y <= fineHeight; y++) for (int x = 0; x < fineWidth; x++)
-            AddFace(VolumeIndexAtFine(x, y - 1), VolumeIndexAtFine(x, y), true, x, y);
-        pressureLinks.Clear(); TotalAirVolume = 0;
-        for (int i = 0; i < cells.Count; i++) { sizes[i] = cells[i].Volume; TotalAirVolume += sizes[i]; }
-        foreach (var face in faces) pressureLinks.Add(new(face.A, face.B, face.Area / face.Distance));
-        pressureSolver.Rebuild(cells.Count, CollectionsMarshal.AsSpan(pressureLinks), sizes);
+        EnsureWorkspace();
+        faces.Clear(); faceOrder.Clear(); faceLookup.Clear();
+        for (int i = 0; i < cells.Count; i++)
+        {
+            var node = cells[i];
+            AddBoundary(i, node.X + node.W, node.Y, node.H, false, false);
+            AddBoundary(i, node.X, node.Y + node.H, node.W, true, false);
+            // Interior left/top gas faces were already emitted by the neighbour.
+            AddBoundary(i, node.X, node.Y, node.H, false, true);
+            AddBoundary(i, node.X, node.Y, node.W, true, true);
+        }
+        // Keep the v7 serialized face layout: x normals in fine row order, then
+        // y normals. Traversal can change without invalidating existing saves.
+        CollectionsMarshal.AsSpan(faceOrder).Sort(CollectionsMarshal.AsSpan(faces));
+        for (int i = 0; i < faces.Count; i++) faceLookup.Add((faces[i].A, faces[i].B, faces[i].Y), i);
+        pressureLinks.Clear(); pressurePoints.Clear(); TotalAirVolume = 0;
+        for (int i = 0; i < cells.Count; i++)
+        {
+            sizes[i] = cells[i].Volume; inverseSizes[i] = 1 / sizes[i]; TotalAirVolume += sizes[i];
+            pressure[i] = cells[i].PressureGuess;
+            pressurePoints.Add(new(cells[i].X, cells[i].Y));
+        }
+        foreach (var face in faces) pressureLinks.Add(new(face.A, face.B, face.Area * face.InverseDistance));
+        pressureSolver.Rebuild(cells.Count, CollectionsMarshal.AsSpan(pressureLinks), sizes, CollectionsMarshal.AsSpan(pressurePoints));
         ReconstructVelocity(); PublishViews();
     }
 
@@ -93,7 +114,24 @@ public sealed partial class AirField
         for (int yy = y; yy < y + h; yy++) for (int xx = x; xx < x + w; xx++) nextCellAtFine[yy * fineWidth + xx] = index;
     }
 
-    private void AddFace(int a, int b, bool vertical, int x, int y)
+    private void AddBoundary(int inside, int x, int y, int length, bool vertical, bool reverse)
+    {
+        for (int start = 0; start < length;)
+        {
+            int other = BoundaryNeighbour(x, y, start, vertical, reverse), end = start + 1;
+            while (end < length && BoundaryNeighbour(x, y, end, vertical, reverse) == other) end++;
+            if (!reverse || other < 0)
+                AddFace(reverse ? other : inside, reverse ? inside : other, vertical,
+                    vertical ? x + start : x, vertical ? y : y + start, end - start);
+            start = end;
+        }
+    }
+
+    private int BoundaryNeighbour(int x, int y, int offset, bool vertical, bool reverse) => vertical
+        ? VolumeIndexAtFine(x + offset, y - (reverse ? 1 : 0))
+        : VolumeIndexAtFine(x - (reverse ? 1 : 0), y + offset);
+
+    private void AddFace(int a, int b, bool vertical, int x, int y, int length)
     {
         if (a == b) return;
         var nodes = CollectionsMarshal.AsSpan(cells);
@@ -101,12 +139,9 @@ public sealed partial class AirField
         if (!boundary && (a < 0 || b < 0))
         {
             int inside = a >= 0 ? a : b;
-            if (inside >= 0) nodes[inside].WallArea += FineArea;
+            if (inside >= 0) nodes[inside].WallArea += FineArea * length;
             return;
         }
-        var key = (a, b, vertical);
-        if (faceLookup.TryGetValue(key, out int id))
-        { CollectionsMarshal.AsSpan(faces)[id].Area += FineArea; return; }
         double ca = a >= 0 ? (vertical ? nodes[a].CenterY : nodes[a].CenterX) : (vertical ? y : x) * World.CellSize;
         double cb = b >= 0 ? (vertical ? nodes[b].CenterY : nodes[b].CenterX) : (vertical ? y : x) * World.CellSize;
         double speedA = a >= 0 ? (vertical ? nodes[a].V : nodes[a].U) : 0;
@@ -114,10 +149,10 @@ public sealed partial class AirField
         int view = -1;
         if (vertical && (y % Scale == 0 || y == fineHeight)) view = (y == fineHeight ? Height : y / Scale) * Width + x / Scale;
         if (!vertical && (x % Scale == 0 || x == fineWidth)) view = y / Scale * (Width + 1) + (x == fineWidth ? Width : x / Scale);
-        faces.Add(new() { A = a, B = b, Y = vertical, Area = FineArea, Distance = Math.Abs(cb - ca),
+        faces.Add(new() { A = a, B = b, Y = vertical, Area = FineArea * length, InverseDistance = 1 / Math.Abs(cb - ca),
             BlendA = a < 0 ? 0 : b < 0 ? 1 : Math.Abs(cb - (vertical ? y : x) * World.CellSize) / Math.Abs(cb - ca),
             View = view, Velocity = a < 0 ? speedB : b < 0 ? speedA : .5 * (speedA + speedB) });
-        faceLookup.Add(key, faces.Count - 1);
+        faceOrder.Add(vertical ? fineHeight * (fineWidth + 1) + y * fineWidth + x : y * (fineWidth + 1) + x);
     }
 
     private void EnsureWorkspace()
@@ -126,6 +161,7 @@ public sealed partial class AirField
         int n = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(16, cells.Count));
         pressure = new double[n]; rhs = new double[n]; sizes = new double[n]; delta = new double[n];
         du = new double[n]; dv = new double[n]; weightX = new double[n]; weightY = new double[n];
+        inverseSizes = new double[n]; transportScale = new double[n]; wallDecay = new double[n];
     }
 
     private void ReconstructVelocity()

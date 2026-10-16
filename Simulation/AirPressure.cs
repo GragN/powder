@@ -17,7 +17,7 @@ public sealed partial class AirField
         foreach (ref var face in CollectionsMarshal.AsSpan(faces))
         {
             double a = face.A >= 0 ? pressure[face.A] : 0, b = face.B >= 0 ? pressure[face.B] : 0;
-            face.Velocity -= seconds * (b - a) / face.Distance;
+            face.Velocity -= seconds * (b - a) * face.InverseDistance;
         }
         Array.Clear(rhs, 0, cells.Count);
         foreach (var face in faces)

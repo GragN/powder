@@ -120,6 +120,7 @@ public sealed partial class World
 
     public void Step()
     {
+        Air.ProfileSteps = Liquids.ProfileSteps = ProfileSteps;
         long profiling = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         stamp++; Tick++;
         activeCount = 0;

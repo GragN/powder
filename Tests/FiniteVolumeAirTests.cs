@@ -4,6 +4,30 @@ public static partial class SelfTests
 {
     private static void RunFiniteVolumeAirTests()
     {
+        Test("finite-volume face velocities retain the version-seven save layout", () =>
+        {
+            var w = new World(35, 29);
+            Scenes.Rect(w, 17, 4, 1, 25, Element.Glass);
+            w.Set(6, 10, Element.Glass); w.Set(29, 16, Element.Glass); w.Air.UpdateObstacles(w);
+            var state = w.Air.Capture();
+            var velocities = Enumerable.Range(0, w.Air.OpenFaceCount).Select(i => (i + 1) * 1e-6).ToArray();
+            w.Air.Restore(state with { FaceVelocity = velocities });
+            var legacy = new Dictionary<(int, int, bool), int>();
+            for (int axis = 0; axis < 2; axis++)
+            for (int y = 0; y < w.Height + axis; y++)
+            for (int x = 0; x < w.Width + 1 - axis; x++)
+            {
+                bool vertical = axis == 1;
+                int a = w.Air.VolumeIndexAtFine(x - (vertical ? 0 : 1), y - (vertical ? 1 : 0));
+                int b = w.Air.VolumeIndexAtFine(x, y);
+                bool open = vertical ? y == 0 : x == 0 || x == w.Width;
+                if (a == b || !open && (a < 0 || b < 0)) continue;
+                var key = (a, b, vertical);
+                if (!legacy.TryGetValue(key, out int index)) { index = legacy.Count; legacy.Add(key, index); }
+                Near(w.Air.NormalVelocityAtFineFace(x, y, vertical), velocities[index], 1e-14);
+            }
+            Check(legacy.Count == velocities.Length, "legacy save has a different number of faces");
+        });
         Test("finite-volume geometry covers exactly the free particle area including ragged edges", () =>
         {
             var w = new World(35, 29);

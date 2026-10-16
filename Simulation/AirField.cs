@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace Powder;
 
@@ -30,6 +31,9 @@ public sealed partial class AirField
     public int OpenFaceCount => faces.Count;
     public int PressureIterations => pressureSolver.LastIterations;
     public double TotalAirVolume { get; private set; }
+    public bool ProfileSteps { get; set; }
+    public readonly record struct Timings(double Momentum, double Pressure, double Heat);
+    public Timings LastTimings { get; private set; }
     private readonly int fineWidth, fineHeight;
     private int[] cellAtFine, nextCellAtFine;
     private bool[] solid, nextSolid;
@@ -39,11 +43,12 @@ public sealed partial class AirField
     private readonly Dictionary<(int A, int B, bool Y), int> faceLookup = [];
     private readonly SparsePressure pressureSolver = new();
     private double[] pressure = [], rhs = [], sizes = [], delta = [], du = [], dv = [], weightX = [], weightY = [];
+    private double[] inverseSizes = [], transportScale = [], wallDecay = [];
 
     private struct AirCell
     {
         public int X, Y, W, H, Block;
-        public double Volume, Capacity, Heat, U, V, WallArea;
+        public double Volume, Capacity, Heat, U, V, WallArea, PressureGuess;
         public readonly int Pixels => W * H;
         public readonly double CenterX => (X + W * .5) * World.CellSize;
         public readonly double CenterY => (Y + H * .5) * World.CellSize;
@@ -53,7 +58,7 @@ public sealed partial class AirField
     {
         public int A, B, View;
         public bool Y;
-        public double Area, Distance, Velocity, BlendA;
+        public double Area, InverseDistance, Velocity, BlendA;
     }
 
     public AirField(int fineWidth, int fineHeight)
@@ -142,14 +147,20 @@ public sealed partial class AirField
 
     public void Step(double seconds)
     {
+        LastTimings = default;
         if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentOutOfRangeException(nameof(seconds));
         ImportVelocityEdits();
         Active = cells.Any(c => Math.Abs(c.Heat) > 1e-14) || faces.Any(f => Math.Abs(f.Velocity) > 1e-10);
         if (!Active || seconds == 0) { DivergenceRms = MaximumDivergence = 0; return; }
+        long started = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         PredictMomentum(seconds);
+        long pressureStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         Project(seconds);
+        long heatStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         TransportHeat(seconds);
         ReconstructVelocity(); PublishViews();
+        if (ProfileSteps) LastTimings = new(Stopwatch.GetElapsedTime(started, pressureStart).TotalMilliseconds,
+            Stopwatch.GetElapsedTime(pressureStart, heatStart).TotalMilliseconds, Stopwatch.GetElapsedTime(heatStart).TotalMilliseconds);
     }
 
     public void ExchangeSurface(World world, int x, int y, double seconds)

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Powder;
 
 // Resolved bulk circulation on the particle grid. The moving, mass-fraction free surface
@@ -11,6 +13,10 @@ public sealed partial class LiquidField
     public double[] U { get; }
     public double[] V { get; }
     public double DivergenceRms { get; private set; }
+    public int PressureIterations { get; private set; }
+    public bool ProfileSteps { get; set; }
+    public readonly record struct Timings(double Advection, double Pressure, double Viscosity, double Transport);
+    public Timings LastTimings { get; private set; }
     private readonly int[] kind, tagU, tagV;
     private readonly bool[] solid;
     private readonly double[] nu, buoyancy, oldU, oldV, pressure, viscousPressure;
@@ -84,9 +90,8 @@ public sealed partial class LiquidField
             }
         }
         activeCount = count;
-        // Aggregation is excellent for large, filled tanks. A moving free surface
-        // can split into disconnected films and islands; use the local IC factor
-        // there so coarse aggregates never tie unrelated pressure null spaces.
+        // Keep the cheaper IC factor for changing films/islands. Geometric
+        // multigrid pays off on large, filled tanks with a stable pressure domain.
         bool multigrid = oneKind && count >= 16384
             && count == (maximumX - minimumX + 1) * (maximumY - minimumY + 1);
         if (pressureEquation.UseMultigrid != multigrid)
@@ -133,19 +138,30 @@ public sealed partial class LiquidField
 
     public void Step(World world, double seconds)
     {
+        PressureIterations = 0; LastTimings = default;
         if (seconds <= 0) return;
         if (UpdateGeometry(world) == 0) { DivergenceRms = 0; return; }
         if (resting) { DivergenceRms = 0; return; }
         U.CopyTo(oldU, 0); V.CopyTo(oldV, 0);
+        long started = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         AdvectFaces(U, tagU, true, seconds);
         AdvectFaces(V, tagV, false, seconds);
+        long firstPressure = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         // Balance hydrostatic buoyancy before applying wall viscosity. Diffusing the
         // unbalanced gravity impulse would create spurious currents in a resting tank.
         Project(seconds, pressure);
+        PressureIterations += pressureEquation.LastIterations;
+        long viscosityStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         DiffuseFaces(U, tagU, true, seconds);
         DiffuseFaces(V, tagV, false, seconds);
+        long secondPressure = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         Project(seconds, viscousPressure);
+        PressureIterations += pressureEquation.LastIterations;
+        long transportStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         Transport(world, seconds);
+        if (ProfileSteps) LastTimings = new(Stopwatch.GetElapsedTime(started, firstPressure).TotalMilliseconds,
+            Stopwatch.GetElapsedTime(firstPressure, viscosityStart).TotalMilliseconds + Stopwatch.GetElapsedTime(secondPressure, transportStart).TotalMilliseconds,
+            Stopwatch.GetElapsedTime(viscosityStart, secondPressure).TotalMilliseconds, Stopwatch.GetElapsedTime(transportStart).TotalMilliseconds);
     }
 
     public (double X, double Y) VelocityAtFine(int x, int y)

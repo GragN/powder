@@ -1,18 +1,22 @@
 namespace Powder;
 
 internal readonly record struct PressureLink(int A, int B, double Weight);
+internal readonly record struct PressurePoint(int X, int Y);
 
-// Symmetric graph Laplacian with a cached IC(0) factor. Refinement changes the
-// connectivity, not the pressure equation or its physical accuracy target.
+// Symmetric graph Laplacian with cached multigrid (IC(0) for small domains).
+// Refinement changes connectivity, not the equation or its accuracy target.
 internal sealed class SparsePressure
 {
     private int count;
     private int[] rows = [], columns = [], reverse = [], cursor = [], parent = [], anchor = [];
     private bool[] open = [], gauge = [];
+    private readonly PressureMultigrid multigrid = new();
+    private bool useMultigrid, multigridDirty;
+    private PressurePoint[] matrixPoints = [];
     public int LastIterations { get; private set; }
     private double[] diagonal = [], values = [], lower = [], inverseFactor = [], inverseVolume = [], r = [], z = [], p = [], ap = [], work = [];
 
-    public void Rebuild(int size, ReadOnlySpan<PressureLink> links, double[] volumes)
+    public void Rebuild(int size, ReadOnlySpan<PressureLink> links, double[] volumes, ReadOnlySpan<PressurePoint> points)
     {
         count = size;
         if (diagonal.Length < size)
@@ -20,6 +24,7 @@ internal sealed class SparsePressure
             int n = (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(16, size));
             rows = new int[n + 1]; cursor = new int[n]; diagonal = new double[n]; inverseFactor = new double[n]; inverseVolume = new double[n];
             parent = new int[n]; anchor = new int[n]; open = new bool[n]; gauge = new bool[n];
+            matrixPoints = new PressurePoint[n];
             r = new double[n]; z = new double[n]; p = new double[n]; ap = new double[n]; work = new double[n];
         }
         if (rows.Length == 0) rows = new int[1];
@@ -57,6 +62,12 @@ internal sealed class SparsePressure
             columns[a] = edge.B; columns[b] = edge.A; values[a] = values[b] = -edge.Weight;
         }
         for (int i = 0; i < size; i++) Array.Sort(columns, values, rows[i], rows[i + 1] - rows[i]);
+        useMultigrid = size > 256;
+        if (useMultigrid)
+        {
+            points.CopyTo(matrixPoints); multigridDirty = true;
+            return; // cold, motionless air needs no pressure hierarchy at all
+        }
         for (int i = 0; i < size; i++) for (int k = rows[i]; k < rows[i + 1]; k++)
         {
             int j = columns[k];
@@ -91,7 +102,7 @@ internal sealed class SparsePressure
 
     private unsafe void Multiply(double[] x, double[] output)
     {
-        // Rebuild validates all graph indices and symmetric reverse entries.
+        // Rebuild constructs valid, symmetric graph entries from internal faces.
         // These buffers stay pinned only for the duration of the hot loop.
         fixed (int* row = rows, col = columns)
         fixed (double* d = diagonal, a = values, source = x, target = output)
@@ -105,6 +116,18 @@ internal sealed class SparsePressure
 
     private unsafe double Precondition()
     {
+        if (useMultigrid)
+        {
+            if (multigridDirty)
+            {
+                multigrid.Rebuild(count, rows, columns, diagonal, values, matrixPoints.AsSpan(0, count));
+                multigridDirty = false;
+            }
+            multigrid.Apply(r, z);
+            double dot = 0;
+            for (int i = 0; i < count; i++) dot += r[i] * z[i];
+            return dot;
+        }
         fixed (int* row = rows, col = columns, other = reverse)
         fixed (double* residual = r, result = z, forward = work, l = lower, inv = inverseFactor)
         {

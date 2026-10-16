@@ -1,0 +1,61 @@
+{
+  "FormatVersion": 2,
+  "Runtime": ".NET 10.0.13",
+  "Architecture": "X64",
+  "Width": 480,
+  "Height": 336,
+  "FixedDelta": 0.016666666666666666,
+  "Measurements": [
+    {
+      "Scenario": "empty",
+      "WarmupSteps": 30,
+      "MeasuredSteps": 180,
+      "WallMillisecondsPerStep": 0.8026772222222222,
+      "CpuMillisecondsPerStep": 0.8020777777777778,
+      "MedianMillisecondsPerStep": 0.7435,
+      "P95MillisecondsPerStep": 1.2399,
+      "AllocatedBytesPerStep": 8,
+      "Particles": 0,
+      "Mass": 0,
+      "Energy": 0,
+      "VaporParticles": 0,
+      "SurfaceBowlDepthCells": null,
+      "AirVolumes": 10080,
+      "AirOpenFaces": 20244
+    },
+    {
+      "Scenario": "water-boiling",
+      "WarmupSteps": 30,
+      "MeasuredSteps": 180,
+      "WallMillisecondsPerStep": 44.16271166666667,
+      "CpuMillisecondsPerStep": 44.12292777777778,
+      "MedianMillisecondsPerStep": 44.6376,
+      "P95MillisecondsPerStep": 66.116,
+      "AllocatedBytesPerStep": 56,
+      "Particles": 16211,
+      "Mass": 0.7356125082624747,
+      "Energy": 435248.36662827805,
+      "VaporParticles": 995,
+      "SurfaceBowlDepthCells": -9.791666666666686,
+      "AirVolumes": 9264,
+      "AirOpenFaces": 18558
+    },
+    {
+      "Scenario": "demo",
+      "WarmupSteps": 30,
+      "MeasuredSteps": 180,
+      "WallMillisecondsPerStep": 129.17129944444446,
+      "CpuMillisecondsPerStep": 128.4781722222222,
+      "MedianMillisecondsPerStep": 124.2789,
+      "P95MillisecondsPerStep": 177.9203,
+      "AllocatedBytesPerStep": 10,
+      "Particles": 32640,
+      "Mass": 2.8214557200002806,
+      "Energy": 552942.4229635247,
+      "VaporParticles": 0,
+      "SurfaceBowlDepthCells": null,
+      "AirVolumes": 12935,
+      "AirOpenFaces": 25150
+    }
+  ]
+}

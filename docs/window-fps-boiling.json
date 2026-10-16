@@ -1,0 +1,23 @@
+{
+  "FormatVersion": 1,
+  "Platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "Scene": "boiling",
+  "Frames": 240,
+  "IncludesStartup": true,
+  "IncludesFinalScreenshot": true,
+  "TieredCompilation": false,
+  "Display": ":98",
+  "SoftwareOpenGL": "1",
+  "Measurements": [
+    {
+      "Version": "before",
+      "ElapsedSeconds": 18.105514763999963,
+      "FramesPerSecond": 13.255629742005633
+    },
+    {
+      "Version": "after",
+      "ElapsedSeconds": 14.073733127006562,
+      "FramesPerSecond": 17.053044692133312
+    }
+  ]
+}

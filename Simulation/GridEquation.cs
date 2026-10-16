@@ -11,6 +11,7 @@ internal sealed class GridEquation(int size)
         inverseFactor = new double[size], forward = new double[size], preconditioned = new double[size];
     public int Count, Stride;
     public bool UseMultigrid { get; set; }
+    public int LastIterations { get; private set; }
     private bool matrixChanged = true;
     private Multigrid? multigrid;
 
@@ -85,6 +86,7 @@ internal sealed class GridEquation(int size)
 
     public unsafe void Solve(double[] x, double tolerance, int iterations = 240)
     {
+        LastIterations = 0;
         fixed (int* active = Active)
         fixed (double* rhs = Rhs, values = x, r = residual, p = product, d = direction, z = preconditioned)
         {
@@ -109,6 +111,7 @@ internal sealed class GridEquation(int size)
             for (int k = 0; k < Count; k++) { int i = active[k]; d[i] = z[i]; }
             for (int step = 0; step < iterations && rz > 1e-28; step++)
             {
+                LastIterations = step + 1;
                 Multiply(direction, product);
                 double denominator = 0;
                 for (int k = 0; k < Count; k++) { int i = active[k]; denominator += d[i] * p[i]; }

@@ -23,6 +23,8 @@ public sealed class SandboxApp
         (850, new(236, 66, 70, 255)), (1500, new(255, 229, 211, 255))
     ];
     private readonly Color[] pixels = new Color[GridWidth * GridHeight];
+    private Color[] airColors = [];
+    private bool[] airColorReady = [];
     private World world = new(GridWidth, GridHeight);
     private Element selected = Element.Sand;
     private Font font;
@@ -448,13 +450,30 @@ public sealed class SandboxApp
 
     private void RenderPixels()
     {
+        if (thermal && world.AtmosphereEnabled)
+        {
+            int count = world.Air.ControlVolumeCount;
+            if (airColors.Length < count)
+            {
+                int n = (int)BitOperations.RoundUpToPowerOf2((uint)Math.Max(16, count));
+                airColors = new Color[n]; airColorReady = new bool[n];
+            }
+            Array.Clear(airColorReady, 0, count);
+        }
         for (int i = 0; i < pixels.Length; i++)
         {
             ref readonly var p = ref world.Cells[i];
             if (p.Element == Element.Empty)
             {
-                pixels[i] = thermal && world.AtmosphereEnabled
-                    ? HeatColor(world.Air.TemperatureAtFine(i % GridWidth, i / GridWidth)) : CanvasBackground;
+                if (!thermal || !world.AtmosphereEnabled) { pixels[i] = CanvasBackground; continue; }
+                int x = i % GridWidth, y = i / GridWidth, volume = world.Air.VolumeIndexAtFine(x, y);
+                if (volume < 0) { pixels[i] = HeatColor(world.Air.AmbientTemperature); continue; }
+                if (!airColorReady[volume])
+                {
+                    airColors[volume] = HeatColor(world.Air.TemperatureAtFine(x, y));
+                    airColorReady[volume] = true;
+                }
+                pixels[i] = airColors[volume];
                 continue;
             }
             if (thermal) { pixels[i] = HeatColor(p.Temperature); continue; }
