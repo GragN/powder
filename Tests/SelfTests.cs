@@ -406,6 +406,7 @@ public static partial class SelfTests
         });
         RunAtmosphereTests();
         RunLiquidTests();
+        RunVaporizationTests();
         Test("full demo remains finite and conserves the mass budget", () =>
         {
             var w = new World(SandboxApp.GridWidth, SandboxApp.GridHeight);

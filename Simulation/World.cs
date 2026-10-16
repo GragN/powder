@@ -44,7 +44,7 @@ public sealed partial class World
         double mass = m.Density * CellVolume;
         At(x, y) = new Particle
         {
-            Element = e, MeltOrigin = Thermodynamics.CanMelt(e) ? e : Element.Stone, Mass = mass,
+            Element = e, MeltOrigin = e == Element.Oil || Thermodynamics.CanMelt(e) ? e : Element.Stone, Mass = mass,
             Energy = mass * Thermodynamics.SpecificEnthalpy(e, t),
             Life = e == Element.Fire ? 1.1f + random.NextSingle() * 1.2f : 0,
             Variation = (byte)random.Next(256), Stamp = stamp
@@ -138,12 +138,13 @@ public sealed partial class World
         ref var p = ref Cells[i];
         Thermodynamics.ResolvePhase(ref p);
         double t = p.Temperature;
-        if (p.Element is Element.Wood or Element.Oil && t > (p.Element == Element.Wood ? 300 : 280))
+        if (p.Element == Element.Wood && t > 300
+            || p.Element == Element.Vapor && p.MeltOrigin == Element.Oil && t > 400)
         {
             // Fuel energy is a deliberate chemical source. Oxygen is an ambient reservoir.
             double before = p.Energy;
             p.Element = Element.Fire;
-            p.Energy = p.Mass * 1100 * Math.Max(t, 750);
+            p.Energy = Math.Max(before, p.Mass * 1100 * Math.Max(t, 750));
             ExternalEnergy += p.Energy - before;
             p.Life = 1.5f + random.NextSingle() * 2;
         }

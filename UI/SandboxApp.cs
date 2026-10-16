@@ -187,7 +187,8 @@ public sealed class SandboxApp
         int x = (int)(pos.X - CanvasX) / 2, y = (int)(pos.Y - CanvasY) / 2;
         if (inside && IsMouseButtonPressed(MouseButton.Middle))
         {
-            selected = world.At(x, y).Element; tool = 0;
+            ref readonly var picked = ref world.At(x, y);
+            selected = picked.Element == Element.Vapor ? picked.MeltOrigin : picked.Element; tool = 0;
         }
         bool draw = inside && (IsMouseButtonDown(MouseButton.Left) || IsMouseButtonDown(MouseButton.Right));
         if (pendingAction is not null) draw = false;
@@ -324,7 +325,7 @@ public sealed class SandboxApp
         Text("Under cursor", 648, 14, 9, Muted);
         Text("Temperature", 788, 14, 9, Muted);
         Text("Mass", 916, 14, 9, Muted);
-        Text(hasParticle ? Materials.Get(particle.Element).Name : hasAir ? "Air" : "--", 648, 30, 12, Ink);
+        Text(hasParticle ? Materials.Name(particle) : hasAir ? "Air" : "--", 648, 30, 12, Ink);
         Text(hasParticle ? $"{particle.Temperature:F1} C" : hasAir ? $"{airTemperature:F1} C" : "--", 788, 30, 12, Ink);
         Text(hasParticle ? $"{particle.Mass * 1000:F3} g" : "--", 916, 30, 12, Ink);
     }
@@ -410,6 +411,9 @@ public sealed class SandboxApp
         Property("Density", $"{selectedMaterial.Density:N0} kg/m3", 577);
         Property("Heat capacity", $"{selectedMaterial.SpecificHeat:N0} J/kg K", 600);
         Property("Conductivity", $"{selectedMaterial.Conductivity:0.###} W/m K", 623);
+        Element origin = selected == Element.Lava ? Element.Stone : Materials.IsWater(selected) ? Element.Water : selected;
+        if (origin == Element.Water || VaporProperties.Supports(origin))
+            Property("Boiling point", $"{VaporProperties.BoilingPoint(origin):N0} C", 646);
         ControlButton(Control.Atmosphere, "Atmosphere", world.AtmosphereEnabled);
         Wrapped(selectedMaterial.Description, 1000, 704, 256, 11, Muted);
     }
@@ -616,6 +620,23 @@ public sealed class SandboxApp
             Press(Control.Airflow);
             if (!showAirflow || !world.AtmosphereEnabled) throw new InvalidOperationException("Air display failed.");
             SetMousePosition(CanvasX + 110 * 2 + 1, CanvasY + 30 * 2 + 1);
+        }
+        if (frame == 70)
+        {
+            Pick(4); Press(Control.Properties);
+            world.Set(200, 30, Element.Oil, 340);
+            ref var oil = ref world.At(200, 30);
+            double q = Thermodynamics.EnergyAtTemperature(oil, 370) - oil.Energy;
+            world.HeatBrush(200, 30, 0, 20, q / 20);
+            if (oil.Element != Element.Vapor || oil.MeltOrigin != Element.Oil || Materials.Name(oil) != "Oil vapor")
+                throw new InvalidOperationException("Oil evaporation or vapor inspection failed.");
+            SetMousePosition(CanvasX + 200 * 2 + 1, CanvasY + 30 * 2 + 1);
+        }
+        if (frame == 80)
+        {
+            Press(Control.Save); Press(Control.Clear); ConfirmAction(); Press(Control.Load);
+            if (world.At(200, 30).Element != Element.Vapor || world.At(200, 30).MeltOrigin != Element.Oil)
+                throw new InvalidOperationException("UI failed to restore oil vapor.");
         }
     }
 }

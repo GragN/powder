@@ -13,12 +13,14 @@ public static class LiquidProperties
     public static double MeltHeatCapacity(Element origin) => origin switch
     { Element.Copper => 520, Element.Iron => 820, _ => 1200 };
 
-    public static double Conductivity(in Particle p) => p.Element == Element.Lava ? p.MeltOrigin switch
+    public static double Conductivity(in Particle p) => p.Element == Element.Vapor ? VaporProperties.Conductivity(p.MeltOrigin)
+        : p.Element == Element.Lava ? p.MeltOrigin switch
     { Element.Copper => 160, Element.Iron => 35, Element.Sand or Element.Glass => 1.5, _ => 2 }
         : Materials.Get(p.Element).Conductivity;
 
     public static double ReferenceDensity(in Particle p) => p.Element switch
     {
+        Element.Vapor => VaporProperties.Density(p.MeltOrigin, p.Temperature),
         Element.Water => WaterDensity(20), Element.Oil => 850,
         Element.Lava => p.MeltOrigin switch
         { Element.Copper => 8020, Element.Iron => 7000, Element.Sand or Element.Glass => 2200, _ => 2600 },

@@ -36,8 +36,11 @@ public static class Thermodynamics
             if (t > 100 || e == Element.Steam && t == 100) return BoilingGas + SteamHeat * (t - 100);
             return Fusion + WaterHeat * t;
         }
-        Element origin = e == Element.Lava ? Element.Stone : e;
-        if (e == Element.Lava && t >= MeltingPoint(origin) || CanMelt(e) && t > MeltingPoint(e))
+        Element origin = e is Element.Lava or Element.Vapor ? Element.Stone : e;
+        if (VaporProperties.Supports(origin) && (t > VaporProperties.BoilingPoint(origin)
+            || e == Element.Vapor && t == VaporProperties.BoilingPoint(origin)))
+            return VaporProperties.BoilingGas(origin) + VaporProperties.SpecificHeat(origin) * (t - VaporProperties.BoilingPoint(origin));
+        if ((e is Element.Lava or Element.Vapor) && t >= MeltingPoint(origin) || CanMelt(e) && t > MeltingPoint(e))
             return LiquidEnthalpy(origin, t);
         return Materials.Get(origin).SpecificHeat * t;
     }
@@ -47,7 +50,7 @@ public static class Thermodynamics
         if (Materials.IsWater(p.Element))
             return (p.Mass - p.DissolvedSalt) * SpecificEnthalpy(Element.Water, t)
                 + p.DissolvedSalt * SaltHeat * t;
-        Element origin = p.Element == Element.Lava ? p.MeltOrigin : p.Element;
+        Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         return p.Mass * (p.EnthalpyOffset + SpecificEnthalpy(origin, t));
     }
 
@@ -69,8 +72,14 @@ public static class Thermodynamics
             if (p.Energy < boilEnd) return 100;
             return 100 + (p.Energy - boilEnd) / gasCapacity;
         }
-        Element origin = p.Element == Element.Lava ? p.MeltOrigin : p.Element;
+        Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         double h = p.Energy / p.Mass - p.EnthalpyOffset;
+        if (VaporProperties.Supports(origin))
+        {
+            double start = VaporProperties.BoilingLiquid(origin), end = VaporProperties.BoilingGas(origin);
+            if (h >= end) return VaporProperties.BoilingPoint(origin) + (h - end) / VaporProperties.SpecificHeat(origin);
+            if (h >= start) return VaporProperties.BoilingPoint(origin);
+        }
         double cp = Materials.Get(origin).SpecificHeat;
         if (CanMelt(origin))
         {
@@ -85,24 +94,29 @@ public static class Thermodynamics
     public static void ResolvePhase(ref Particle p)
     {
         Element before = p.Element;
-        if (CanMelt(p.Element))
+        Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
+        if (VaporProperties.Supports(origin))
         {
-            double end = p.Mass * (p.EnthalpyOffset + Materials.Get(p.Element).SpecificHeat * MeltingPoint(p.Element))
-                + p.Mass * FusionHeat(p.Element);
-            if (p.Energy >= end)
-            { p.MeltOrigin = p.Element; p.Element = Element.Lava; }
-        }
-        else if (p.Element == Element.Lava)
-        {
-            double cp = Materials.Get(p.MeltOrigin).SpecificHeat;
-            double solid = p.Mass * (p.EnthalpyOffset + cp * MeltingPoint(p.MeltOrigin));
-            if (p.Energy <= solid)
+            double boilStart = p.Mass * (p.EnthalpyOffset + VaporProperties.BoilingLiquid(origin));
+            double boilEnd = p.Mass * (p.EnthalpyOffset + VaporProperties.BoilingGas(origin));
+            p.MeltOrigin = origin;
+            if (p.Energy >= boilEnd || before == Element.Vapor && p.Energy > boilStart)
+                p.Element = Element.Vapor;
+            else if (origin == Element.Oil) p.Element = Element.Oil;
+            else
             {
-                Element solidElement = p.MeltOrigin == Element.Sand ? Element.Glass : p.MeltOrigin;
-                // A change in heat capacity must not create energy or jump in temperature.
-                p.EnthalpyOffset += (cp - Materials.Get(solidElement).SpecificHeat) * MeltingPoint(p.MeltOrigin);
-                p.Element = solidElement;
-                p.MeltOrigin = solidElement;
+                double cp = Materials.Get(origin).SpecificHeat;
+                double meltStart = p.Mass * (p.EnthalpyOffset + cp * MeltingPoint(origin));
+                double meltEnd = meltStart + p.Mass * FusionHeat(origin);
+                if (p.Energy >= meltEnd || (before is Element.Lava or Element.Vapor) && p.Energy > meltStart)
+                    p.Element = Element.Lava;
+                else
+                {
+                    Element solid = origin == Element.Sand && (before is Element.Lava or Element.Vapor) ? Element.Glass : origin;
+                    // Silica's enthalpy reference must survive evaporation as well as melting.
+                    p.EnthalpyOffset += (cp - Materials.Get(solid).SpecificHeat) * MeltingPoint(origin);
+                    p.Element = p.MeltOrigin = solid;
+                }
             }
         }
         else if (Materials.IsWater(p.Element))
@@ -133,22 +147,29 @@ public static class Thermodynamics
             return SelectSegment(p.Energy, heating, 0, a, b, c,
                 m * IceHeat + salt, m * WaterHeat + salt, m * SteamHeat + salt);
         }
-        Element origin = p.Element == Element.Lava ? p.MeltOrigin : p.Element;
-        if (CanMelt(origin))
+        Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
+        if (VaporProperties.Supports(origin))
         {
-            double cp = Materials.Get(origin).SpecificHeat;
-            double start = p.Mass * (p.EnthalpyOffset + cp * MeltingPoint(origin));
-            double end = start + p.Mass * FusionHeat(origin);
+            double c = p.Mass * (p.EnthalpyOffset + VaporProperties.BoilingLiquid(origin));
+            double d = c + p.Mass * VaporProperties.LatentHeat(origin);
+            if (CanMelt(origin))
+            {
+                double cp = Materials.Get(origin).SpecificHeat;
+                double a = p.Mass * (p.EnthalpyOffset + cp * MeltingPoint(origin));
+                double b = a + p.Mass * FusionHeat(origin);
+                return SelectSegment(p.Energy, heating, a, b, c, d,
+                    p.Mass * cp, p.Mass * LiquidProperties.MeltHeatCapacity(origin), p.Mass * VaporProperties.SpecificHeat(origin));
+            }
             double epsilon = 1e-12 * Math.Max(1, Math.Abs(p.Energy));
             if (heating)
             {
-                if (p.Energy < start - epsilon) return (p.Mass * cp, start);
-                if (p.Energy < end - epsilon) return (double.PositiveInfinity, end);
-                return (p.Mass * LiquidProperties.MeltHeatCapacity(origin), double.PositiveInfinity);
+                if (p.Energy < c - epsilon) return (p.Mass * Materials.Get(origin).SpecificHeat, c);
+                if (p.Energy < d - epsilon) return (double.PositiveInfinity, d);
+                return (p.Mass * VaporProperties.SpecificHeat(origin), double.PositiveInfinity);
             }
-            if (p.Energy > end + epsilon) return (p.Mass * LiquidProperties.MeltHeatCapacity(origin), end);
-            if (p.Energy > start + epsilon) return (double.PositiveInfinity, start);
-            return (p.Mass * cp, double.NegativeInfinity);
+            if (p.Energy > d + epsilon) return (p.Mass * VaporProperties.SpecificHeat(origin), d);
+            if (p.Energy > c + epsilon) return (double.PositiveInfinity, c);
+            return (p.Mass * Materials.Get(origin).SpecificHeat, double.NegativeInfinity);
         }
         return (p.HeatCapacity, heating ? double.PositiveInfinity : double.NegativeInfinity);
     }
