@@ -179,22 +179,26 @@ public sealed class SandboxApp
             var point = new Vector2(x, y);
             Vector2 start = painting ? previous : point;
             int distance = Math.Max(1, (int)Vector2.Distance(start, point));
+            double strokeSeconds = Math.Min(GetFrameTime(), .1);
+            if (!paused) strokeSeconds = Math.Min(strokeSeconds * speed,
+                Math.Max(0, World.FixedDelta * 8 - accumulator));
             // A continuous stroke does not leave gaps between frames.
             for (int n = 0; n <= distance; n++)
             {
                 Vector2 p = Vector2.Lerp(start, point, (float)n / distance);
-                Paint((int)p.X, (int)p.Y, IsMouseButtonDown(MouseButton.Right));
+                Paint((int)p.X, (int)p.Y, IsMouseButtonDown(MouseButton.Right),
+                    strokeSeconds / (distance + 1));
             }
             previous = point;
         }
         painting = draw;
     }
 
-    private void Paint(int x, int y, bool erase = false)
+    private void Paint(int x, int y, bool erase = false, double seconds = World.FixedDelta)
     {
         if (erase) world.Brush(x, y, radius, Element.Empty, true);
         else if (tool == 0) world.Brush(x, y, radius, selected);
-        else world.HeatBrush(x, y, radius, tool == 1 ? 8 : -8);
+        else world.HeatBrush(x, y, radius, tool == 1 ? 20 : -20, seconds);
     }
 
     private enum Control

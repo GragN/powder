@@ -6,6 +6,8 @@ public sealed partial class World
     public const double Depth = .01;    // 1 cm slice perpendicular to the screen
     public const double CellVolume = CellSize * CellSize * Depth;
     public const double FixedDelta = 1.0 / 60;
+    public const double Gravity = 9.81; // m/s²; identical free-fall acceleration for every mass
+    private const int ThermalSubsteps = 2;
     public int Width { get; }
     public int Height { get; }
     public Particle[] Cells { get; }
@@ -38,11 +40,12 @@ public sealed partial class World
         double mass = m.Density * CellVolume;
         At(x, y) = new Particle
         {
-            Element = e, MeltOrigin = Element.Stone, Mass = mass,
+            Element = e, MeltOrigin = Thermodynamics.CanMelt(e) ? e : Element.Stone, Mass = mass,
             Energy = mass * Thermodynamics.SpecificEnthalpy(e, t),
             Life = e == Element.Fire ? 1.1f + random.NextSingle() * 1.2f : 0,
             Variation = (byte)random.Next(256), Stamp = stamp
         };
+        Thermodynamics.ResolvePhase(ref At(x, y));
     }
 
     public void Clear()
@@ -60,24 +63,19 @@ public sealed partial class World
                     Set(xx, yy, element);
     }
 
-    public void HeatBrush(int x, int y, int radius, double degrees)
+    // Each covered cell receives the same power, not the same temperature change.
+    public void HeatBrush(int x, int y, int radius, double powerWatts, double seconds = FixedDelta)
     {
+        if (!double.IsFinite(powerWatts) || !double.IsFinite(seconds) || seconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(powerWatts));
         for (int yy = y - radius; yy <= y + radius; yy++)
             for (int xx = x - radius; xx <= x + radius; xx++)
                 if (Inside(xx, yy) && (xx - x) * (xx - x) + (yy - y) * (yy - y) <= radius * radius)
                 {
                     ref var p = ref At(xx, yy);
                     if (p.Element == Element.Empty) continue;
-                    double q = degrees * p.HeatCapacity;
-                    double minimum = Materials.IsWater(p.Element)
-                        ? -273.15 * ((p.Mass - p.DissolvedSalt) * 2100 + p.DissolvedSalt * 880)
-                        : p.Mass * Materials.Get(p.Element == Element.Lava ? p.MeltOrigin : p.Element).SpecificHeat * -273.15;
-                    double maximum = p.Mass * (Materials.IsWater(p.Element)
-                        ? Thermodynamics.SpecificEnthalpy(Element.Steam, 6000)
-                        : Thermodynamics.CanMelt(p.Element) || p.Element == Element.Lava
-                            ? Thermodynamics.LiquidEnthalpy(p.Element == Element.Lava ? p.MeltOrigin : p.Element, 6000)
-                            : Materials.Get(p.Element).SpecificHeat * 6000);
-                    double energy = Math.Clamp(p.Energy + q, minimum, maximum);
+                    double energy = Math.Clamp(p.Energy + powerWatts * seconds,
+                        Thermodynamics.EnergyAtTemperature(p, -273.15), Thermodynamics.EnergyAtTemperature(p, 6000));
                     ExternalEnergy += energy - p.Energy; p.Energy = energy;
                     Thermodynamics.ResolvePhase(ref p);
                 }
@@ -97,19 +95,22 @@ public sealed partial class World
     public void Step()
     {
         stamp++; Tick++;
-        // Pair exchanges are conservative; reverse the sweep to reduce directional bias.
-        for (int k = 0; k < Cells.Length; k++)
+        // Two smaller, alternating sweeps reduce splitting error without a stability cap on k.
+        for (int substep = 0; substep < ThermalSubsteps; substep++)
         {
-            int i = (Tick & 1) == 0 ? k : Cells.Length - 1 - k;
-            if (Cells[i].Element == Element.Empty) continue;
-            if (i % Width + 1 < Width) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + 1], FixedDelta);
-            if (i + Width < Cells.Length) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + Width], FixedDelta);
-            if (AmbientCooling && Exposed(i))
+            double seconds = FixedDelta / ThermalSubsteps;
+            for (int k = 0; k < Cells.Length; k++)
             {
-                ref var p = ref Cells[i];
-                double q = (AmbientTemperature - p.Temperature) * p.HeatCapacity
-                    * (1 - Math.Exp(-12 * CellSize * Depth * FixedDelta / p.HeatCapacity));
-                p.Energy += q; ExternalEnergy += q;
+                int i = ((Tick + substep) & 1) == 0 ? k : Cells.Length - 1 - k;
+                if (Cells[i].Element == Element.Empty) continue;
+                if (i % Width + 1 < Width) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + 1], seconds);
+                if (i + Width < Cells.Length) Thermodynamics.Exchange(ref Cells[i], ref Cells[i + Width], seconds);
+                if (AmbientCooling && Exposed(i))
+                {
+                    ref var p = ref Cells[i];
+                    ExternalEnergy += Thermodynamics.ExchangeWithReservoir(ref p, AmbientTemperature,
+                        12 * CellSize * Depth, seconds);
+                }
             }
         }
         // Bottom-up sweep plus stamps ensure a particle is moved at most once per tick.
@@ -192,17 +193,28 @@ public sealed partial class World
             return;
         }
         ref var p = ref Cells[i];
-        p.VelocityY = Math.Min(240, p.VelocityY + (float)(9.81 / CellSize * FixedDelta));
-        p.Travel += p.VelocityY * (float)FixedDelta;
-        int steps = Math.Min(4, (int)p.Travel);
-        p.Travel -= steps;
+        double acceleration = Gravity / CellSize;
+        // Exact constant-acceleration displacement, with subcell travel retained across ticks.
+        double travelDistance = p.Travel + p.VelocityY * FixedDelta + .5 * acceleration * FixedDelta * FixedDelta;
+        p.VelocityY += acceleration * FixedDelta;
+        double wholeCells = Math.Floor(travelDistance);
+        p.Travel = travelDistance - wholeCells;
+        // The only traversal bound is the world edge; every crossed cell is collision-checked.
+        int steps = (int)Math.Clamp(wholeCells, 0, Height);
+        if (steps == 0) return;
         int current = i, yy = y;
+        bool blocked = false;
         for (int n = 0; n < steps; n++)
         {
             if (TryMove(current, x, yy + 1)) { yy++; current += Width; }
-            else { Cells[current].VelocityY = 0; Cells[current].Travel = 0; break; }
+            else
+            {
+                Cells[current].VelocityY = 0; Cells[current].Travel = 0;
+                blocked = true; break;
+            }
         }
-        if (current != i) return;
+        if (!blocked) return;
+        i = current; y = yy;
         if (TryMove(i, x + direction, y + 1) || TryMove(i, x - direction, y + 1)) return;
         if (state != MatterState.Liquid) return;
         // Lateral search gives water rapid leveling; viscous lava flows more slowly.

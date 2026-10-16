@@ -5,7 +5,8 @@ namespace Powder;
 public static class WorldFile
 {
     private sealed record Cell(int Index, Element Element, Element Origin, double Mass,
-        double Energy, double Salt, float Velocity, float Travel, float Life, byte Variation);
+        double Energy, double Salt, double Velocity, double Travel, float Life, byte Variation,
+        double EnthalpyOffset = 0);
     private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
 
@@ -15,7 +16,7 @@ public static class WorldFile
     public static void Save(World world, string path)
     {
         var cells = world.Cells.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
-            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation))
+            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset))
             .Where(p => p.Element != Element.Empty).ToArray();
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
@@ -41,13 +42,14 @@ public static class WorldFile
                 || c.Element == Element.Lava && !Thermodynamics.CanMelt(c.Origin)
                 || !double.IsFinite(c.Mass) || c.Mass <= 0 || !double.IsFinite(c.Energy)
                 || !double.IsFinite(c.Salt) || c.Salt < 0 || c.Salt > c.Mass
-                || !float.IsFinite(c.Velocity) || !float.IsFinite(c.Travel) || !float.IsFinite(c.Life))
+                || !double.IsFinite(c.Velocity) || c.Velocity < 0 || !double.IsFinite(c.Travel)
+                || c.Travel < 0 || c.Travel >= 1 || !float.IsFinite(c.Life) || !double.IsFinite(c.EnthalpyOffset))
                 throw new InvalidDataException("Invalid particle data.");
             world.Cells[c.Index] = new Particle
             {
                 Element = c.Element, MeltOrigin = c.Origin, Mass = c.Mass, Energy = c.Energy,
                 DissolvedSalt = c.Salt, VelocityY = c.Velocity, Travel = c.Travel,
-                Life = c.Life, Variation = c.Variation
+                Life = c.Life, Variation = c.Variation, EnthalpyOffset = c.EnthalpyOffset
             };
         }
         return world;

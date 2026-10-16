@@ -19,7 +19,7 @@ public static class Materials
     public static readonly Material[] All =
     [
         new(Element.Empty, "Erase", MatterState.Empty, new(35, 43, 57), 0, 1, 0, 20, "Remove matter with the brush."),
-        new(Element.Sand, "Sand", MatterState.Powder, new(230, 189, 111), 1600, 830, .27, 20, "Granular silica. Falls and forms piles."),
+        new(Element.Sand, "Sand", MatterState.Powder, new(230, 189, 111), 1600, 830, .27, 20, "Granular silica. Melt and cool to make glass."),
         new(Element.Water, "Water", MatterState.Liquid, new(71, 149, 230), 998, 4184, .60, 20, "Freezes at 0 C. Boils at 100 C."),
         new(Element.Stone, "Stone", MatterState.Solid, new(126, 139, 157), 2700, 790, 2.5, 20, "Rigid walls. Melts near 1200 C."),
         new(Element.Wood, "Wood", MatterState.Solid, new(165, 109, 68), 650, 1700, .12, 20, "Insulator. Ignites above 300 C."),
