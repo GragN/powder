@@ -15,6 +15,7 @@ public struct Particle
     public float Life;
     public uint Stamp;
     public byte Variation;
+    public int RigidId;          // 0: anchored/unowned, -1: drawn stroke, -2: newly solidified
 
     // Sensible heat capacity. Latent intervals are handled separately by the enthalpy solver.
     public readonly double HeatCapacity => Math.Max(1e-12,

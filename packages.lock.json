@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "Aether.Physics2D": {
+        "type": "Direct",
+        "requested": "[2.2.0, )",
+        "resolved": "2.2.0",
+        "contentHash": "/6WSIiXeHYG6JpZHshIBg4nTi2rMMrdzkSUQPdWqjT2xyYOsZSdrfUuF3xWAHHUgq8Rlv07ZLUFV8ml6nIeMDw=="
+      },
       "Raylib-cs": {
         "type": "Direct",
         "requested": "[7.0.2, )",

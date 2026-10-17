@@ -18,9 +18,9 @@ public static class Benchmarks
         }
         string? selected = Option("--benchmark-scene");
         string[] scenarios = selected is null ? ["empty", "water-boiling", "demo"] : [selected];
-        if (scenarios.Any(s => s is not ("empty" or "water-boiling" or "demo")))
+        if (scenarios.Any(s => s is not ("empty" or "water-boiling" or "demo" or "rigid-bodies")))
         {
-            Console.Error.WriteLine("Benchmark scene must be empty, water-boiling or demo.");
+            Console.Error.WriteLine("Benchmark scene must be empty, water-boiling, demo or rigid-bodies.");
             return 2;
         }
         var measurements = new List<Measurement>();
@@ -29,6 +29,7 @@ public static class Benchmarks
             var world = new World(480, 336);
             if (scenario == "demo") Scenes.Demo(world);
             if (scenario == "water-boiling") BoilingTank(world);
+            if (scenario == "rigid-bodies") Scenes.RigidBodies(world);
             for (int n = 0; n < WarmupSteps; n++) Advance(world, scenario);
             GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
             using var process = Process.GetCurrentProcess();
@@ -55,7 +56,7 @@ public static class Benchmarks
                 world.Cells.Count(p => p.Element is Element.Steam or Element.Vapor)
                     + world.Bubbles.Count(p => p.Element is Element.Steam or Element.Vapor),
                 scenario == "water-boiling" ? SurfaceBowlDepth(world) : null,
-                world.Air.ControlVolumeCount, world.Air.OpenFaceCount);
+                world.Air.ControlVolumeCount, world.Air.OpenFaceCount, world.Solids.Count);
             measurements.Add(measurement);
             Console.WriteLine($"{scenario}: {measurement.WallMillisecondsPerStep:F3} ms/step wall, "
                 + $"{measurement.CpuMillisecondsPerStep:F3} ms/step CPU, "
@@ -63,7 +64,7 @@ public static class Benchmarks
         }
         var report = new
         {
-            FormatVersion = 2,
+            FormatVersion = 3,
             Runtime = RuntimeInformation.FrameworkDescription,
             Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
             Width = 480, Height = 336, FixedDelta = World.FixedDelta,
@@ -119,5 +120,5 @@ public static class Benchmarks
         double WallMillisecondsPerStep, double CpuMillisecondsPerStep,
         double MedianMillisecondsPerStep, double P95MillisecondsPerStep,
         long AllocatedBytesPerStep, int Particles, double Mass, double Energy,
-        int VaporParticles, double? SurfaceBowlDepthCells, int AirVolumes, int AirOpenFaces);
+        int VaporParticles, double? SurfaceBowlDepthCells, int AirVolumes, int AirOpenFaces, int RigidBodies);
 }

@@ -75,6 +75,7 @@ public sealed class SandboxApp
                 Scenes.Convection(world); thermal = true; showAirflow = true;
             }
             if (args.Contains("--boiling-demo")) Scenes.Boiling(world);
+            if (args.Contains("--rigid-demo")) Scenes.RigidBodies(world);
             if (args.Contains("--liquid-demo"))
             {
                 Scenes.LiquidConvection(world); thermal = true; showAirflow = true;
@@ -158,6 +159,7 @@ public sealed class SandboxApp
 
     private void Input()
     {
+        if (world.Solids.Drawing && !IsMouseButtonDown(MouseButton.Left)) world.Solids.EndStroke();
         if (IsKeyPressed(KeyboardKey.F1)) help = !help;
         if (pendingAction is not null)
         {
@@ -202,6 +204,12 @@ public sealed class SandboxApp
         }
         bool draw = inside && (IsMouseButtonDown(MouseButton.Left) || IsMouseButtonDown(MouseButton.Right));
         if (pendingAction is not null) draw = false;
+        bool solidStroke = draw && tool == 0 && IsMouseButtonDown(MouseButton.Left)
+            && !IsMouseButtonDown(MouseButton.Right) && Materials.Get(selected).State == MatterState.Solid;
+        if (world.Solids.Drawing && (!solidStroke && inside || tool != 0
+            || Materials.Get(selected).State != MatterState.Solid)) world.Solids.EndStroke();
+        if (solidStroke && !world.Solids.Drawing)
+            world.Solids.BeginStroke(IsKeyDown(KeyboardKey.LeftShift) || IsKeyDown(KeyboardKey.RightShift));
         if (draw)
         {
             var point = new Vector2(x, y);
@@ -445,7 +453,7 @@ public sealed class SandboxApp
             Text("1500+ C", 814, 753, 10, Muted);
         }
         if (GetTime() < toastUntil) Text(toast, 16, 778, 11, Accent);
-        else Text("LMB draw   /   RMB erase   /   Scroll brush size   /   Space pause", 16, 778, 11, Muted);
+        else Text("LMB draw   /   Release solids to drop   /   Shift+LMB anchor   /   RMB erase   /   Space pause", 16, 778, 11, Muted);
     }
 
     private void RenderPixels()
@@ -523,8 +531,9 @@ public sealed class SandboxApp
         DrawRectangle(0, 0, WindowWidth, WindowHeight, new(0, 0, 0, 185));
         DrawRectangleRounded(new(332, 157, 616, 487), .05f, 6, Panel);
         Text("YOUR PARTICLE LABORATORY", 367, 191, 24, Ink);
-        Text("Every cell is a 2 x 2 pixel piece of matter.", 367, 229, 14, Accent);
+        Text("Every cell is 2 x 2 pixels. Release solid strokes to drop them.", 367, 229, 13, Accent);
         string[] lines = ["Left mouse: draw     Right mouse: erase     Middle mouse: pick",
+            "Shift + left mouse: draw an anchored solid construction",
             "Mouse wheel or [ / ]: change brush radius",
             "B: draw     H: heat     J: cool     1-9: quick material selection",
             "Space: pause     N: single step     T: temperature     A: flow",
@@ -533,7 +542,7 @@ public sealed class SandboxApp
             "F1: close this guide     Esc: quit the game"];
         for (int i = 0; i < lines.Length; i++) Text(lines[i], 367, 274 + i * 31, 13, Ink);
         Wrapped("Try heating water, melting ice, dropping sand into a liquid, or igniting wood. Hover over matter to inspect its mass and temperature.",
-            367, 510, 540, 14, Muted);
+            367, 538, 540, 14, Muted);
         Text("A physics sandbox. See README for the model's limits.", 367, 603, 12, Accent);
     }
 

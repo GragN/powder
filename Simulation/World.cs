@@ -16,6 +16,8 @@ public sealed partial class World
     public bool AtmosphereEnabled { get; set; } = true;
     public AirField Air { get; }
     public LiquidField Liquids { get; }
+    public RigidBodyField Solids { get; }
+    internal uint CurrentStamp => stamp;
     public long Tick { get; private set; }
     public long VisualRevision { get; private set; }
     private bool hadBodies;
@@ -40,6 +42,7 @@ public sealed partial class World
         activeCells = new int[Cells.Length];
         Air = new AirField(width, height);
         Liquids = new LiquidField(width, height);
+        Solids = new RigidBodyField(this);
         random = new Random(seed);
     }
 
@@ -62,6 +65,7 @@ public sealed partial class World
             Variation = (byte)random.Next(256), Stamp = stamp
         };
         Thermodynamics.ResolvePhase(ref At(x, y));
+        Solids.Created(y * Width + x);
     }
 
     public void Clear()
@@ -70,6 +74,7 @@ public sealed partial class World
         Array.Clear(Cells); Array.Clear(Bubbles); Array.Clear(bubbleScratch);
         bubbleIndices.Clear(); nextBubbleIndices.Clear(); Array.Clear(bubbleListed); activeCount = 0;
         Air.Reset(); Liquids.Reset(); Tick = 0; stamp = 0; EscapedMass = 0; EscapedEnergy = 0; ExternalEnergy = 0;
+        Solids.Reset();
         random = new Random(417);
     }
 
@@ -98,6 +103,7 @@ public sealed partial class World
                         Thermodynamics.EnergyAtTemperature(p, -273.15), Thermodynamics.EnergyAtTemperature(p, 6000));
                     ExternalEnergy += energy - p.Energy; p.Energy = energy;
                     Thermodynamics.ResolvePhase(ref p);
+                    if (p.RigidId == -2) Solids.QueueSolid(yy * Width + xx);
                 }
     }
 
@@ -168,6 +174,7 @@ public sealed partial class World
                 if (Cells[i].Element == Element.Empty || Cells[i].Stamp == stamp) continue;
                 Cells[i].Stamp = stamp;
                 React(i, i % Width, y);
+                if (Cells[i].RigidId == -2) Solids.QueueSolid(i);
                 Move(i, i % Width, y);
             }
             end = start - 1;
@@ -177,6 +184,9 @@ public sealed partial class World
         if (bubbleIndices.Count != 0) StepBubbles();
         double bubblesMs = ProfileSteps ? Stopwatch.GetElapsedTime(bubblesStart).TotalMilliseconds : 0;
         double releaseMs = ProfileSteps ? Stopwatch.GetElapsedTime(phaseStart, liquidStart).TotalMilliseconds : 0;
+        long rigidStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
+        Solids.Step(FixedDelta);
+        if (ProfileSteps) motionMs += Stopwatch.GetElapsedTime(rigidStart).TotalMilliseconds;
         long atmosphereStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         if (AtmosphereEnabled)
         {
@@ -237,6 +247,7 @@ public sealed partial class World
                 if (p.Mass < 1e-12) { other.Mass += p.Mass; other.Energy += p.Energy; p = default; }
             }
         }
+        if (p.RigidId != 0 && Materials.Get(p.Element).State != MatterState.Solid) p.RigidId = 0;
     }
 
     private void Escape(int index)
@@ -244,6 +255,9 @@ public sealed partial class World
         EscapedMass += Cells[index].Mass; EscapedEnergy += Cells[index].Energy;
         Cells[index] = default;
     }
+
+    internal void RigidEscape(in Particle p) { EscapedMass += p.Mass; EscapedEnergy += p.Energy; }
+    internal void PlaceRigidBubble(int index, in Particle p) => AddBubble(index, p);
 
     private bool TryMove(int from, int x, int y, bool rising = false)
     {

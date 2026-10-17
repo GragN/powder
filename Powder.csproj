@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Raylib-cs" Version="7.0.2" />
+    <PackageReference Include="Aether.Physics2D" Version="2.2.0" />
     <None Update="Assets/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

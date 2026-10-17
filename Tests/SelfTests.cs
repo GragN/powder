@@ -414,6 +414,7 @@ public static partial class SelfTests
         RunLiquidSolverTests();
         RunVaporizationTests();
         RunBoilingBehaviorTests();
+        RunRigidBodyTests();
         Test("full demo remains finite and conserves the mass budget", () =>
         {
             var w = new World(SandboxApp.GridWidth, SandboxApp.GridHeight);

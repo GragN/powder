@@ -1,0 +1,28 @@
+{
+  "FormatVersion": 3,
+  "Runtime": ".NET 10.0.13",
+  "Architecture": "X64",
+  "Width": 480,
+  "Height": 336,
+  "FixedDelta": 0.016666666666666666,
+  "Measurements": [
+    {
+      "Scenario": "rigid-bodies",
+      "WarmupSteps": 30,
+      "MeasuredSteps": 180,
+      "WallMillisecondsPerStep": 10.963104444444443,
+      "CpuMillisecondsPerStep": 10.96275,
+      "MedianMillisecondsPerStep": 10.8134,
+      "P95MillisecondsPerStep": 13.3364,
+      "AllocatedBytesPerStep": 17227,
+      "Particles": 2562,
+      "Mass": 0.4851822399999827,
+      "Energy": 5416.47119520005,
+      "VaporParticles": 0,
+      "SurfaceBowlDepthCells": null,
+      "AirVolumes": 10578,
+      "AirOpenFaces": 21167,
+      "RigidBodies": 4
+    }
+  ]
+}

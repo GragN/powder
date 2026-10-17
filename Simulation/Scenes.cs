@@ -2,6 +2,24 @@ namespace Powder;
 
 public static class Scenes
 {
+    public static void RigidBodies(World w)
+    {
+        w.Clear();
+        int floor = w.Height;
+        Rect(w, 110, floor - 62, 26, 62, Element.Stone);
+        Piece(125, floor - 66, 70, 4, Element.Copper);
+        w.Solids.BeginStroke(); w.Brush(240, floor - 15, 13, Element.Iron); w.Solids.EndStroke();
+        var wheel = w.Solids.Diagnostics().OrderBy(b => Math.Abs(b.X / World.CellSize - 240)).First();
+        w.Solids.SetMotion(wheel.Id, .12, 0);
+        Piece(365, 24, 14, 10, Element.Iron);
+        w.Solids.BeginStroke(); w.Brush(375, floor - 15, 11, Element.Wood); w.Solids.EndStroke();
+
+        void Piece(int x, int y, int width, int height, Element element)
+        {
+            w.Solids.BeginStroke(); Rect(w, x, y, width, height, element); w.Solids.EndStroke();
+        }
+    }
+
     public static void Boiling(World w)
     {
         w.Clear();

@@ -6,9 +6,9 @@ public static class WorldFile
 {
     private sealed record Cell(int Index, Element Element, Element Origin, double Mass,
         double Energy, double Salt, double Velocity, double Travel, float Life, byte Variation,
-        double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0);
+        double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0, int RigidId = 0);
     private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells,
-        AirField.State? Air = null, LiquidField.State? Liquids = null, Cell[]? Bubbles = null);
+        AirField.State? Air = null, LiquidField.State? Liquids = null, Cell[]? Bubbles = null, RigidBodyField.State? Solids = null);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
 
     public static string DefaultPath => Path.Combine(
@@ -16,9 +16,10 @@ public static class WorldFile
 
     public static void Save(World world, string path)
     {
+        var solids = world.Solids.Capture();
         world.Air.UpdateObstacles(world); // include edits made while paused
         var cells = world.Cells.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
-            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
+            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX, p.RigidId))
             .Where(p => p.Element != Element.Empty).ToArray();
         var bubbles = world.Bubbles.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
             p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
@@ -26,8 +27,8 @@ public static class WorldFile
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temp = full + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(7, world.Width, world.Height,
-            world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture(), bubbles), Options));
+        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(8, world.Width, world.Height,
+            world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture(), bubbles, solids), Options));
         File.Move(temp, full, true);
     }
 
@@ -36,7 +37,7 @@ public static class WorldFile
         if (new FileInfo(path).Length > 64 * 1024 * 1024) throw new InvalidDataException("Scene is too large.");
         var s = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(path), Options)
             ?? throw new InvalidDataException("Empty scene.");
-        if (s.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
+        if (s.Version is < 1 or > 8 || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
             throw new InvalidDataException("Unsupported scene version or dimensions.");
         var world = new World(s.Width, s.Height) { AtmosphereEnabled = s.Cooling };
         var occupied = new HashSet<int>();
@@ -50,6 +51,8 @@ public static class WorldFile
                 || layer == 1 && !(Materials.IsWater(c.Element) || c.Element is Element.Oil or Element.Lava or Element.Vapor || Thermodynamics.CanMelt(c.Element))
                 || c.Element == Element.Lava && !Thermodynamics.CanMelt(c.Origin)
                 || c.Element == Element.Vapor && (s.Version < 4 || !VaporProperties.Supports(c.Origin) || c.Salt != 0)
+                || s.Version >= 8 && (c.RigidId < 0 || c.RigidId > 2_000_000
+                    || c.RigidId > 0 && (layer == 1 || Materials.Get(c.Element).State != MatterState.Solid))
                 || !double.IsFinite(c.Mass) || c.Mass <= 0 || !double.IsFinite(c.Energy)
                 || !double.IsFinite(c.Salt) || c.Salt < 0 || c.Salt > c.Mass
                 || !double.IsFinite(c.Velocity) || !double.IsFinite(c.Travel)
@@ -62,7 +65,7 @@ public static class WorldFile
                 Element = c.Element, MeltOrigin = c.Origin, Mass = c.Mass, Energy = c.Energy,
                 DissolvedSalt = c.Salt, VelocityY = c.Velocity, Travel = c.Travel,
                 Life = c.Life, Variation = c.Variation, EnthalpyOffset = c.EnthalpyOffset,
-                VelocityX = c.VelocityX, TravelX = c.TravelX
+                VelocityX = c.VelocityX, TravelX = c.TravelX, RigidId = s.Version >= 8 ? c.RigidId : 0
             };
             if (s.Version < 3 && c.Element == Element.Lava)
             {
@@ -74,8 +77,10 @@ public static class WorldFile
             }
             // Apply the new phase boundaries to older scenes without inventing vaporization energy.
             if (s.Version < 4) Thermodynamics.ResolvePhase(ref world.Cells[c.Index]);
+            if (s.Version < 8) destination[c.Index].RigidId = 0;
         }
         world.RebuildBubbleIndices();
+        if (s.Version >= 8) world.Solids.Restore(s.Solids ?? throw new InvalidDataException("Missing rigid body data."));
         world.Air.UpdateObstacles(world);
         if (s.Version == 6 && s.Air?.PocketHeat is null) throw new InvalidDataException("Missing boundary-air data.");
         if (s.Version >= 7 && (s.Air?.VolumeHeat is null || s.Air.FaceVelocity is null || s.Air.TrappedHeat is null))

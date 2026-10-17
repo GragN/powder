@@ -138,7 +138,9 @@ public static class Thermodynamics
                 : p.Energy > boilStart && before == Element.Steam ? Element.Steam : Element.Water;
         }
         if (p.Element != before && Materials.Get(p.Element).State == MatterState.Solid)
-        { p.VelocityX = p.VelocityY = 0; p.TravelX = p.Travel = 0; }
+        { p.RigidId = -2; p.TravelX = p.Travel = 0; }
+        else if (p.RigidId != 0 && Materials.Get(p.Element).State != MatterState.Solid)
+            p.RigidId = 0;
     }
 
     // The heat capacity and next energy boundary in the direction of heat flow.

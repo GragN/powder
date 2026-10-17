@@ -118,10 +118,16 @@ public sealed partial class World
     private bool DepositCondensate(int index, in Particle condensate)
     {
         ref var liquid = ref Cells[index];
-        if (liquid.Element == Element.Empty) { liquid = condensate; liquid.Stamp = stamp; return true; }
+        if (liquid.Element == Element.Empty)
+        {
+            liquid = condensate; liquid.Stamp = stamp;
+            if (liquid.RigidId == -2) Solids.QueueSolid(index);
+            return true;
+        }
         if (Substance(liquid) != Substance(condensate) || Materials.Get(liquid.Element).State != MatterState.Liquid)
             return false;
         Merge(ref liquid, condensate); Thermodynamics.ResolvePhase(ref liquid);
+        if (liquid.RigidId == -2) Solids.QueueSolid(index);
         return true;
     }
 
