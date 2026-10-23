@@ -1,0 +1,27 @@
+{
+  "FormatVersion": 2,
+  "Platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "Scene": "boiling",
+  "Frames": 240,
+  "IncludesStartup": true,
+  "IncludesFinalScreenshot": true,
+  "TieredCompilation": false,
+  "Display": ":98",
+  "SoftwareOpenGL": "1",
+  "Measurements": [
+    {
+      "Version": "before",
+      "ElapsedSeconds": 14.74220928698196,
+      "FramesPerSecond": 16.27978516163998,
+      "WindowWidth": 1280,
+      "WindowHeight": 800
+    },
+    {
+      "Version": "after",
+      "ElapsedSeconds": 6.1374422349908855,
+      "FramesPerSecond": 39.10423769558402,
+      "WindowWidth": 960,
+      "WindowHeight": 624
+    }
+  ]
+}
