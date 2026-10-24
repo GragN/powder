@@ -20,9 +20,20 @@ public static class ParticleAppearance
         return (float)(1 - Math.Exp(-opticalDepth));
     }
 
-    public static float DispersedOpacity(in Particle particle) => particle.Element is Element.Water or Element.Ice
-        ? (float)(1 - Math.Exp(-particle.Mass / (Materials.Get(Element.Water).Density * World.CellVolume)))
-        : VaporOpacity(particle);
+    // Condensate can switch storage layers within a tick or when it grows past
+    // the resolution threshold. Its appearance must not depend on that layer.
+    // Fractional drops fill only part of a pixel; full water/ice cells stay opaque.
+    public static float Opacity(in Particle particle)
+    {
+        if (particle.Element is Element.Water or Element.Ice)
+        {
+            double fullMass = Materials.Get(particle.Element).Density * World.CellVolume;
+            return (float)Math.Clamp(particle.Mass / fullMass, 0, 1);
+        }
+        return VaporOpacity(particle);
+    }
+
+    public static float DispersedOpacity(in Particle particle) => Opacity(particle);
 
     private static Rgb[] CreateVariationColors()
     {

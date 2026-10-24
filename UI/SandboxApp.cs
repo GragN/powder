@@ -145,7 +145,7 @@ public sealed class SandboxApp
                     {
                         if (!File.Exists(scenePath) || !thermal || !paused || tool != 0)
                             throw new InvalidOperationException("UI smoke actions did not complete.");
-                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear, fractional boiling, submerged vapor, sub-boiling evaporation and vapor transparency.");
+                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear, fractional boiling, submerged vapor, sub-boiling evaporation, vapor transparency and condensate layer transitions.");
                     }
                     break;
                 }
@@ -525,16 +525,16 @@ public sealed class SandboxApp
                     c = Mix(c, new(255, 125, 54, 255), glow);
                 }
             }
-            pixels[i] = p.Element is Element.Steam or Element.Vapor
-                ? Mix(CanvasBackground, c, ParticleAppearance.VaporOpacity(p)) : c;
+            float opacity = ParticleAppearance.Opacity(p);
+            pixels[i] = opacity >= 1 ? c : Mix(CanvasBackground, c, opacity);
         }
         foreach (int i in world.BubbleLocations)
         {
             ref readonly var bubble = ref world.Bubbles[i];
             if (bubble.Element == Element.Empty) continue;
-            Rgb c = Materials.Get(bubble.Element).Color;
+            Rgb c = ParticleAppearance.VariedColor(bubble.Element, bubble.Variation);
             pixels[i] = thermal ? HeatColor(bubble.Temperature)
-                : Mix(pixels[i], new Color(c.R, c.G, c.B, (byte)255), ParticleAppearance.DispersedOpacity(bubble));
+                : Mix(pixels[i], new Color(c.R, c.G, c.B, (byte)255), ParticleAppearance.Opacity(bubble));
         }
         UpdateTexture(texture, pixels);
     }
@@ -747,5 +747,47 @@ public sealed class SandboxApp
             if (world.At(240, 129).CondensationOffset <= 0)
                 throw new InvalidOperationException("UI failed to restore dilute vapor.");
         }
+        if (frame == 115) CheckCondensatePixels();
     }
+
+    private void CheckCondensatePixels()
+    {
+        const int x = 280, y = 150, index = y * GridWidth + x;
+        var savedCell = world.Cells[index]; var savedBubble = world.Bubbles[index];
+        bool savedThermal = thermal;
+        try
+        {
+            thermal = false;
+            foreach (var element in new[] { Element.Water, Element.Ice, Element.Steam })
+            {
+                world.Set(x, y, element);
+                var full = world.Cells[index];
+                Color previous = default;
+                foreach (double fill in new[] { .000001, .001, .049, .051, .5, 1.0 })
+                {
+                    var drop = full; drop.Mass *= fill; drop.Energy *= fill;
+                    world.Cells[index] = drop; world.Bubbles[index] = default;
+                    world.RebuildBubbleIndices(); RenderPixels();
+                    Color main = pixels[index];
+                    world.Cells[index] = default; world.Bubbles[index] = drop;
+                    world.RebuildBubbleIndices(); RenderPixels();
+                    if (!main.Equals(pixels[index]))
+                        throw new InvalidOperationException("Condensate brightness changes between particle layers.");
+                    if (fill < .01 && ColorDifference(main, CanvasBackground) > 3)
+                        throw new InvalidOperationException("Microscopic condensate flashes as a bright water pixel.");
+                    if (fill == .051 && ColorDifference(main, previous) > 3)
+                        throw new InvalidOperationException("Condensate flashes at the resolution threshold.");
+                    previous = main;
+                }
+            }
+        }
+        finally
+        {
+            world.Cells[index] = savedCell; world.Bubbles[index] = savedBubble;
+            world.RebuildBubbleIndices(); thermal = savedThermal; RenderPixels();
+        }
+    }
+
+    private static int ColorDifference(Color a, Color b)
+        => Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B);
 }
