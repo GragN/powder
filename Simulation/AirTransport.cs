@@ -4,6 +4,7 @@ namespace Powder;
 
 public sealed partial class AirField
 {
+    private double[] faceBuoyancy = [];
     private int TransportSteps(double seconds, double diffusivity)
     {
         Array.Clear(delta, 0, cells.Count); Array.Clear(rhs, 0, cells.Count);
@@ -31,6 +32,20 @@ public sealed partial class AirField
             transportScale[i] = dt * inverseSizes[i];
             wallDecay[i] = nodes[i].WallArea == 0 ? 0
                 : Math.Exp(-Viscosity * nodes[i].WallArea * inverseSizes[i] / (World.CellSize * .5) * dt) - 1;
+        }
+        if (faceBuoyancy.Length < fluxes.Length)
+            Array.Resize(ref faceBuoyancy, (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)fluxes.Length));
+        // Heat is unchanged throughout momentum substeps. The same buoyancy
+        // increment can be reused while velocities alone are advected.
+        for (int i = 0; i < nodes.Length; i++) dv[i] = CellTemperature(i);
+        for (int i = 0; i < fluxes.Length; i++)
+        {
+            ref readonly var face = ref fluxes[i];
+            if (!face.Y) continue;
+            double ta = face.A >= 0 ? dv[face.A] : AmbientTemperature;
+            double tb = face.B >= 0 ? dv[face.B] : AmbientTemperature;
+            double t = face.BlendA * ta + (1 - face.BlendA) * tb;
+            faceBuoyancy[i] = dt * World.Gravity * ((AmbientTemperature + 273.15) / Math.Max(50, t + 273.15) - 1);
         }
         for (int step = 0; step < steps; step++)
         {
@@ -61,18 +76,13 @@ public sealed partial class AirField
                 // a whole-block zero velocity around a particle-sized wall.
                 du[i] += nodes[i].U * wallDecay[i]; dv[i] += nodes[i].V * wallDecay[i];
             }
-            foreach (ref var face in fluxes)
+            for (int i = 0; i < fluxes.Length; i++)
             {
+                ref var face = ref fluxes[i];
                 double a = face.A >= 0 ? (face.Y ? nodes[face.A].V + dv[face.A] : nodes[face.A].U + du[face.A]) : 0;
                 double b = face.B >= 0 ? (face.Y ? nodes[face.B].V + dv[face.B] : nodes[face.B].U + du[face.B]) : 0;
                 face.Velocity = face.BlendA * a + (1 - face.BlendA) * b;
-                if (face.Y)
-                {
-                    double ta = face.A >= 0 ? CellTemperature(face.A) : AmbientTemperature;
-                    double tb = face.B >= 0 ? CellTemperature(face.B) : AmbientTemperature;
-                    double t = face.BlendA * ta + (1 - face.BlendA) * tb;
-                    face.Velocity += dt * World.Gravity * ((AmbientTemperature + 273.15) / Math.Max(50, t + 273.15) - 1);
-                }
+                if (face.Y) face.Velocity += faceBuoyancy[i];
             }
         }
     }

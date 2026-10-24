@@ -8,6 +8,9 @@ public struct Particle
     public double Energy;        // J, includes phase-transition energy
     public double DissolvedSalt; // kg, included in Mass
     public double EnthalpyOffset; // J/kg, energy reference retained when sand becomes glass
+    // Temperature-only dilute-vapor model: 100 minus the surface temperature
+    // at emission. Zero retains the normal 100 C steam curve (including old saves).
+    public double CondensationOffset;
     public double VelocityY;     // cells / second
     public double VelocityX;     // gases follow the air; condensed droplets retain inertia
     public double Travel;        // fractional cells

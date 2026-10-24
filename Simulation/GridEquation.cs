@@ -234,15 +234,31 @@ internal sealed class GridEquation(int size)
             }
         }
 
+        private static unsafe void SweepFromZero(Level level)
+        {
+            // Active indices are ordered by row. On the first sweep from zero,
+            // east/south corrections are zero and west/north are already set.
+            fixed (int* active = level.Active)
+            fixed (double* d = level.D, w = level.W, n = level.N, b = level.B, x = level.X)
+            for (int k = 0; k < level.Count; k++)
+            {
+                int i = active[k];
+                double value = b[i];
+                if (w[i] != 0) value += w[i] * x[i - 1];
+                if (n[i] != 0) value += n[i] * x[i - level.Width];
+                x[i] = value / d[i];
+            }
+        }
+
         private static unsafe void Cycle(Level level)
         {
-            for (int k = 0; k < level.Count; k++) level.X[level.Active[k]] = 0;
             if (level.Coarse is not { } coarse)
             {
-                for (int n = 0; n < 16; n++) { Sweep(level, false); Sweep(level, true); }
+                SweepFromZero(level); Sweep(level, true);
+                for (int n = 1; n < 16; n++) { Sweep(level, false); Sweep(level, true); }
                 return;
             }
-            Sweep(level, false);
+            SweepFromZero(level);
             for (int k = 0; k < coarse.Count; k++) coarse.B[coarse.Active[k]] = 0;
             fixed (int* active = level.Active, parent = level.Parent)
             fixed (double* d = level.D, w = level.W, e = level.E, n = level.N, s = level.S,

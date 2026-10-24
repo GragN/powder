@@ -41,6 +41,9 @@ public sealed partial class World
             if (Cells[index].Element == Element.Empty) break;
             int xx = x + sign;
             if (!Receives(xx, y)) continue;
+            // Surface tension is unresolved, but touching subcell drops should not
+            // remain two half-filled cells merely because their levels are equal.
+            if (TryCoalesceLiquid(index, xx, y)) return;
             double otherFill = Inside(xx, y) && LiquidProperties.Kind(At(xx, y)) == kind ? At(xx, y).Mass / LiquidMassPerCell(At(xx, y)) : 0;
             double fill = Cells[index].Mass / rest;
             double amount = Math.Max(0, fill - otherFill) * rest * .5;

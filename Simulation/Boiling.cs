@@ -18,6 +18,11 @@ public sealed partial class World
         : p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
     private static bool SameVapor(in Particle a, in Particle b) => IsVapor(a) && IsVapor(b) && Substance(a) == Substance(b)
         && Math.Abs(a.EnthalpyOffset - b.EnthalpyOffset) < 1e-8;
+    private static bool SameParcel(in Particle a, in Particle b) => SameVapor(a, b)
+        || LiquidProperties.Kind(a) != 0 && LiquidProperties.Kind(a) == LiquidProperties.Kind(b)
+        || a.Element is Element.Water or Element.Ice && b.Element is Element.Water or Element.Ice;
+    internal static bool SubcellDrop(in Particle p) => p.Element is Element.Water or Element.Ice && p.DissolvedSalt == 0
+        && p.Mass < Materials.Get(Element.Water).Density * CellVolume * .05;
 
     private static double LiquidMassPerCell(in Particle p)
     {
@@ -30,13 +35,13 @@ public sealed partial class World
     {
         if (parcel.DissolvedSalt != 0) return false;
         ref var target = ref Bubbles[index];
-        if (target.Element != Element.Empty && !SameVapor(target, parcel)) return false;
+        if (target.Element != Element.Empty && !SameParcel(target, parcel)) return false;
         if (target.Element == Element.Empty)
         {
             target = parcel; target.Stamp = stamp;
             if (!bubbleListed[index]) { bubbleIndices.Add(index); bubbleListed[index] = true; }
         }
-        else Merge(ref target, parcel);
+        else { Merge(ref target, parcel); Thermodynamics.ResolvePhase(ref target); }
         return true;
     }
 
@@ -45,6 +50,7 @@ public sealed partial class World
     {
         double total = receiver.Mass + donor.Mass;
         receiver.EnthalpyOffset = (receiver.EnthalpyOffset * receiver.Mass + donor.EnthalpyOffset * donor.Mass) / total;
+        receiver.CondensationOffset = (receiver.CondensationOffset * receiver.Mass + donor.CondensationOffset * donor.Mass) / total;
         receiver.VelocityX = (receiver.VelocityX * receiver.Mass + donor.VelocityX * donor.Mass) / total;
         receiver.VelocityY = (receiver.VelocityY * receiver.Mass + donor.VelocityY * donor.Mass) / total;
         receiver.Mass = total; receiver.Energy += donor.Energy; receiver.DissolvedSalt += donor.DissolvedSalt;
@@ -67,12 +73,15 @@ public sealed partial class World
         {
             int i = activeCells[k];
             SeparateNonvolatileSalt(i);
+            if (DisperseCondensate(i)) continue;
             ref readonly var p = ref Cells[i];
             if (Materials.Get(p.Element).State == MatterState.Liquid) phaseCandidates.Add(i);
         }
         foreach (int i in phaseCandidates)
         {
+            if (Cells[i].Element == Element.Water) EvaporateSurface(i);
             ref var p = ref Cells[i];
+            if (Materials.Get(p.Element).State != MatterState.Liquid) continue;
             Element origin = Substance(p);
             if (origin != Element.Water && !VaporProperties.Supports(origin)) continue;
             double waterMass = p.Mass - p.DissolvedSalt;
@@ -118,7 +127,13 @@ public sealed partial class World
     private bool DepositCondensate(int index, in Particle condensate)
     {
         ref var liquid = ref Cells[index];
-        if (liquid.Element == Element.Empty) { liquid = condensate; liquid.Stamp = stamp; return true; }
+        if (liquid.Element == Element.Empty)
+        {
+            // A micron drop is not a full 2 mm wall or a new liquid pressure cell.
+            // Keep it in the dispersed layer until coalescence resolves its volume.
+            if (SubcellDrop(condensate)) return false;
+            liquid = condensate; liquid.Stamp = stamp; return true;
+        }
         if (Substance(liquid) != Substance(condensate) || Materials.Get(liquid.Element).State != MatterState.Liquid)
             return false;
         Merge(ref liquid, condensate); Thermodynamics.ResolvePhase(ref liquid);
@@ -133,8 +148,9 @@ public sealed partial class World
             return;
         }
         Element origin = Substance(bubble);
-        double liquidH = (origin == Element.Water ? Thermodynamics.BoilingLiquid : VaporProperties.BoilingLiquid(origin)) + bubble.EnthalpyOffset;
-        double gasH = (origin == Element.Water ? Thermodynamics.BoilingGas : VaporProperties.BoilingGas(origin)) + bubble.EnthalpyOffset;
+        double saturation = origin == Element.Water ? Thermodynamics.WaterSaturationTemperature(bubble) : 0;
+        double liquidH = (origin == Element.Water ? Thermodynamics.WaterLiquidEnthalpy(saturation) : VaporProperties.BoilingLiquid(origin)) + bubble.EnthalpyOffset;
+        double gasH = (origin == Element.Water ? Thermodynamics.WaterVaporEnthalpy(saturation) : VaporProperties.BoilingGas(origin)) + bubble.EnthalpyOffset;
         double deficit = bubble.Mass * gasH - bubble.Energy;
         if (deficit <= 1e-11) return;
         double amount = Math.Min(bubble.Mass, deficit / (gasH - liquidH));
@@ -142,6 +158,7 @@ public sealed partial class World
         var condensed = bubble;
         condensed.Element = origin == Element.Water ? Element.Water : origin == Element.Oil ? Element.Oil : Element.Lava;
         condensed.Mass = amount; condensed.Energy = amount * liquidH;
+        condensed.CondensationOffset = 0;
         condensed.VelocityX = condensed.VelocityY = condensed.Travel = condensed.TravelX = 0;
         if (!DepositCondensate(index, condensed)) return;
         if (amount >= bubble.Mass * (1 - 1e-12)) bubble = default;
@@ -181,6 +198,14 @@ public sealed partial class World
         if (wet == 0)
         {
             var air = AtmosphereEnabled ? Air.VelocityAtFine(x, y) : (X: 0.0, Y: 0.0);
+            if (SubcellDrop(parcel))
+            {
+                double dropDiameter = Math.Cbrt(6 * parcel.Mass / (Math.PI * LiquidProperties.Density(parcel)));
+                double relativeDensity = LiquidProperties.Density(parcel) / AirField.Density - 1;
+                double settling = Math.Min(Math.Sqrt(4 * Gravity * dropDiameter * relativeDensity / 3),
+                    Gravity * relativeDensity * dropDiameter * dropDiameter / (18 * 1.5e-5));
+                return (air.X / CellSize, (air.Y + settling) / CellSize, .04);
+            }
             return (air.X / CellSize, air.Y / CellSize, .04);
         }
         density /= wet; viscosity /= wet;
@@ -210,7 +235,14 @@ public sealed partial class World
                 double g = 2 * Math.PI * LiquidProperties.Conductivity(body) * BubbleDiameter(parcel);
                 Thermodynamics.Exchange(ref parcel, ref body, FixedDelta, g);
             }
+            if (AtmosphereEnabled && SubcellDrop(parcel))
+            {
+                double diameter = Math.Cbrt(6 * parcel.Mass / (Math.PI * LiquidProperties.Density(parcel)));
+                Air.ExchangeParcel(ref parcel, x, y, 2 * Math.PI * AirField.Conductivity * diameter, FixedDelta);
+            }
             CondenseBubble(index, ref parcel);
+            if (parcel.Element == Element.Empty) continue;
+            EvaporateDrop(index, ref parcel);
             if (parcel.Element == Element.Empty) continue;
             var target = BubbleVelocity(x, y, parcel);
             double decay = Math.Exp(-FixedDelta / target.Relaxation);
@@ -240,22 +272,24 @@ public sealed partial class World
                     // Do not enter a parcel's original cell before it has advanced:
                     // it may condense or hit a wall and need to remain there.
                     || Bubbles[to].Element != Element.Empty
-                    || bubbleScratch[to].Element != Element.Empty && !SameVapor(bubbleScratch[to], parcel))
+                    || bubbleScratch[to].Element != Element.Empty && !SameParcel(bubbleScratch[to], parcel))
                 { parcel.VelocityX = parcel.VelocityY = parcel.TravelX = parcel.Travel = 0; break; }
                 last = to; xx = nx; yy = ny;
                 if (horizontal) { remainingX--; timeX += incrementX; }
                 else { remainingY--; timeY += incrementY; }
             }
             if (parcel.Element == Element.Empty) continue;
-            // Once outside liquid, the parcel joins the normal atmosphere marker layer.
-            if (Cells[last].Element == Element.Empty)
+            // Gas markers and resolved droplets join the main layer. Tiny liquid
+            // drops keep sharing their air volume instead of refining its geometry.
+            if (Cells[last].Element == Element.Empty && !SubcellDrop(parcel))
             {
                 Cells[last] = parcel; Cells[last].Stamp = stamp; continue;
             }
-            if (SameVapor(Cells[last], parcel)) { Merge(ref Cells[last], parcel); continue; }
+            if (SameParcel(Cells[last], parcel))
+            { Merge(ref Cells[last], parcel); Thermodynamics.ResolvePhase(ref Cells[last]); continue; }
             if (bubbleScratch[last].Element == Element.Empty)
             { bubbleScratch[last] = parcel; nextBubbleIndices.Add(last); }
-            else Merge(ref bubbleScratch[last], parcel);
+            else { Merge(ref bubbleScratch[last], parcel); Thermodynamics.ResolvePhase(ref bubbleScratch[last]); }
         }
         foreach (int index in bubbleIndices) bubbleListed[index] = false;
         foreach (int index in nextBubbleIndices) bubbleListed[index] = true;

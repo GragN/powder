@@ -170,18 +170,33 @@ public sealed partial class AirField
         Contact(ref body, x, y - 1, 0, 1, seconds); Contact(ref body, x, y + 1, 0, -1, seconds);
     }
 
+    public void ExchangeParcel(ref Particle parcel, int x, int y, double conductance, double seconds)
+    {
+        int i = VolumeIndexAtFine(x, y);
+        if (i < 0) return;
+        ref var node = ref CollectionsMarshal.AsSpan(cells)[i];
+        var air = new Particle { Element = Element.Air, Mass = node.Capacity / SpecificHeat,
+            Energy = node.Capacity * AmbientTemperature + node.Heat };
+        double before = parcel.Energy;
+        Thermodynamics.Exchange(ref parcel, ref air, seconds, conductance);
+        double q = before - parcel.Energy;
+        node.Heat += q; Heat[node.Block] += q;
+    }
+
     private void Contact(ref Particle body, int x, int y, int nx, int ny, double seconds)
     {
-        double k = LiquidProperties.Conductivity(body);
         if (x < 0 || x >= fineWidth || y < 0 || y >= fineHeight)
         {
             if (y >= fineHeight) return;
-            double g = FineArea / (.5 * World.CellSize / k + .5 * World.CellSize / Conductivity);
+            double g = FineArea / (.5 * World.CellSize / LiquidProperties.Conductivity(body) + .5 * World.CellSize / Conductivity);
             BoundaryHeat -= Thermodynamics.ExchangeWithReservoir(ref body, AmbientTemperature, g, seconds);
             return;
         }
         int i = VolumeIndexAtFine(x, y);
         if (i < 0) return;
+        // Interior material faces have no air contact. Resolve their material
+        // temperature/conductivity only when there is an actual thermal path.
+        double k = LiquidProperties.Conductivity(body);
         ref var node = ref CollectionsMarshal.AsSpan(cells)[i];
         double distance = nx != 0 ? Math.Abs(node.CenterX - (x + .5 + nx * .5) * World.CellSize)
             : Math.Abs(node.CenterY - (y + .5 + ny * .5) * World.CellSize);

@@ -1,0 +1,95 @@
+{
+  "BaselineCommit": "c297936c28336503d0c9323ea44a989dcd12dd7f",
+  "Comparison": "Full updated game including sub-boiling evaporation, condensate and rendering",
+  "MedianFPS": {
+    "before": 41.313768999260496,
+    "after": 47.879109118125946
+  },
+  "MedianFPSIncreasePercent": 15.891409275641166,
+  "Runs": [
+    {
+      "FormatVersion": 2,
+      "Platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+      "Scene": "boiling",
+      "Frames": 240,
+      "IncludesStartup": true,
+      "IncludesFinalScreenshot": true,
+      "TieredCompilation": false,
+      "AfterFirst": false,
+      "Display": ":99",
+      "SoftwareOpenGL": "1",
+      "Measurements": [
+        {
+          "Version": "before",
+          "ElapsedSeconds": 6.111234670999693,
+          "FramesPerSecond": 39.271933237795324,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        },
+        {
+          "Version": "after",
+          "ElapsedSeconds": 4.9681063309981255,
+          "FramesPerSecond": 48.30814479604393,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        }
+      ]
+    },
+    {
+      "FormatVersion": 2,
+      "Platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+      "Scene": "boiling",
+      "Frames": 240,
+      "IncludesStartup": true,
+      "IncludesFinalScreenshot": true,
+      "TieredCompilation": false,
+      "AfterFirst": true,
+      "Display": ":99",
+      "SoftwareOpenGL": "1",
+      "Measurements": [
+        {
+          "Version": "after",
+          "ElapsedSeconds": 5.012624595998204,
+          "FramesPerSecond": 47.879109118125946,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        },
+        {
+          "Version": "before",
+          "ElapsedSeconds": 5.809201285999734,
+          "FramesPerSecond": 41.313768999260496,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        }
+      ]
+    },
+    {
+      "FormatVersion": 2,
+      "Platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+      "Scene": "boiling",
+      "Frames": 240,
+      "IncludesStartup": true,
+      "IncludesFinalScreenshot": true,
+      "TieredCompilation": false,
+      "AfterFirst": false,
+      "Display": ":99",
+      "SoftwareOpenGL": "1",
+      "Measurements": [
+        {
+          "Version": "before",
+          "ElapsedSeconds": 5.801823476002028,
+          "FramesPerSecond": 41.36630509230545,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        },
+        {
+          "Version": "after",
+          "ElapsedSeconds": 5.032763512004749,
+          "FramesPerSecond": 47.68751788704622,
+          "WindowWidth": 960,
+          "WindowHeight": 624
+        }
+      ]
+    }
+  ]
+}

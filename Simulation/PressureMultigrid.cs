@@ -156,14 +156,29 @@ internal sealed class PressureMultigrid
         }
     }
 
+    private static unsafe void SweepFromZero(Level level)
+    {
+        // The first forward sweep starts from a zero correction. Sorted CSR
+        // rows make every upper neighbour zero, so only the already-written
+        // lower triangle is needed; the old correction need not be cleared.
+        fixed (int* rows = level.Rows, columns = level.Columns)
+        fixed (double* b = level.B, x = level.X, values = level.Values, inverse = level.Inverse)
+        for (int i = 0; i < level.Count; i++)
+        {
+            double sum = b[i];
+            for (int j = rows[i]; j < rows[i + 1] && columns[j] < i; j++) sum -= values[j] * x[columns[j]];
+            x[i] = sum * inverse[i];
+        }
+    }
+
     private static unsafe void Cycle(Level level)
     {
-        Array.Clear(level.X, 0, level.Count);
         if (level.Leaf)
         {
             if (!level.Dense)
             {
-                for (int step = 0; step < 8; step++) { Sweep(level, false); Sweep(level, true); }
+                SweepFromZero(level); Sweep(level, true);
+                for (int step = 1; step < 8; step++) { Sweep(level, false); Sweep(level, true); }
                 return;
             }
             int n = level.Count;
@@ -182,7 +197,7 @@ internal sealed class PressureMultigrid
             return;
         }
         var coarse = level.Coarse!;
-        Sweep(level, false); Array.Clear(coarse.B, 0, coarse.Count);
+        SweepFromZero(level); Array.Clear(coarse.B, 0, coarse.Count);
         fixed (int* rows = level.Rows, columns = level.Columns, parent = level.Parent)
         fixed (double* b = level.B, x = level.X, d = level.Diagonal, values = level.Values, target = coarse.B)
         for (int i = 0; i < level.Count; i++)

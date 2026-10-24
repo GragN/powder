@@ -80,6 +80,9 @@ public static partial class SelfTests
         Test("a small bubble condenses in subcooled water and returns its mass and latent heat", () =>
         {
             var w = BoilingBasin(32, 64, 8, 20);
+            // Isolate condensation of the injected bubble from the independently
+            // tested surface evaporation above the basin.
+            Scenes.Rect(w, 5, 7, w.Width - 10, 1, Element.Glass, 20);
             int bubbleIndex = 52 * w.Width + 16;
             w.Bubbles[bubbleIndex] = SaturatedWaterBubble();
             w.RebuildBubbleIndices();

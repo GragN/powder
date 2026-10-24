@@ -6,7 +6,7 @@ public static class WorldFile
 {
     private sealed record Cell(int Index, Element Element, Element Origin, double Mass,
         double Energy, double Salt, double Velocity, double Travel, float Life, byte Variation,
-        double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0);
+        double EnthalpyOffset = 0, double VelocityX = 0, double TravelX = 0, double CondensationOffset = 0);
     private sealed record Snapshot(int Version, int Width, int Height, bool Cooling, Cell[] Cells,
         AirField.State? Air = null, LiquidField.State? Liquids = null, Cell[]? Bubbles = null);
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
@@ -19,15 +19,15 @@ public static class WorldFile
     {
         world.Air.UpdateObstacles(world); // include edits made while paused
         var cells = world.Cells.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
-            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
+            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX, p.CondensationOffset))
             .Where(p => p.Element != Element.Empty).ToArray();
         var bubbles = world.Bubbles.Select((p, i) => new Cell(i, p.Element, p.MeltOrigin, p.Mass,
-            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX))
+            p.Energy, p.DissolvedSalt, p.VelocityY, p.Travel, p.Life, p.Variation, p.EnthalpyOffset, p.VelocityX, p.TravelX, p.CondensationOffset))
             .Where(p => p.Element != Element.Empty).ToArray();
         string full = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         string temp = full + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(7, world.Width, world.Height,
+        File.WriteAllText(temp, JsonSerializer.Serialize(new Snapshot(8, world.Width, world.Height,
             world.AtmosphereEnabled, cells, world.Air.Capture(), world.Liquids.Capture(), bubbles), Options));
         File.Move(temp, full, true);
     }
@@ -37,7 +37,7 @@ public static class WorldFile
         if (new FileInfo(path).Length > 64 * 1024 * 1024) throw new InvalidDataException("Scene is too large.");
         var s = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(path), Options)
             ?? throw new InvalidDataException("Empty scene.");
-        if (s.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
+        if (s.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8) || s.Width != expectedWidth || s.Height != expectedHeight || s.Cells is null)
             throw new InvalidDataException("Unsupported scene version or dimensions.");
         var world = new World(s.Width, s.Height) { AtmosphereEnabled = s.Cooling };
         var occupied = new HashSet<int>();
@@ -57,13 +57,16 @@ public static class WorldFile
                 || c.Travel <= -1 || c.Travel >= 1 || !float.IsFinite(c.Life) || !double.IsFinite(c.EnthalpyOffset)
                 || !double.IsFinite(c.VelocityX) || !double.IsFinite(c.TravelX) || c.TravelX <= -1 || c.TravelX >= 1)
                 throw new InvalidDataException("Invalid particle data.");
+            if (!double.IsFinite(c.CondensationOffset) || c.CondensationOffset < 0 || c.CondensationOffset > 100
+                || c.CondensationOffset != 0 && (s.Version < 8 || c.Element != Element.Steam || c.Salt != 0))
+                throw new InvalidDataException("Invalid dilute-vapor data.");
             var destination = layer == 0 ? world.Cells : world.Bubbles;
             destination[c.Index] = new Particle
             {
                 Element = c.Element, MeltOrigin = c.Origin, Mass = c.Mass, Energy = c.Energy,
                 DissolvedSalt = c.Salt, VelocityY = c.Velocity, Travel = c.Travel,
                 Life = c.Life, Variation = c.Variation, EnthalpyOffset = c.EnthalpyOffset,
-                VelocityX = c.VelocityX, TravelX = c.TravelX
+                VelocityX = c.VelocityX, TravelX = c.TravelX, CondensationOffset = c.CondensationOffset
             };
             if (s.Version < 3 && c.Element == Element.Lava)
             {

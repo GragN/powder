@@ -16,7 +16,8 @@ public sealed partial class AirField
         {
             Element e = world.Cells[i].Element;
             bool occupied = e != Element.Empty && Materials.Get(e).State
-                is MatterState.Solid or MatterState.Powder or MatterState.Liquid;
+                is MatterState.Solid or MatterState.Powder or MatterState.Liquid
+                && !World.SubcellDrop(world.Cells[i]);
             nextSolid[i] = occupied; changed |= occupied != solid[i];
         }
         if (!changed) return;
@@ -100,6 +101,7 @@ public sealed partial class AirField
         }
         foreach (var face in faces) pressureLinks.Add(new(face.A, face.B, face.Area * face.InverseDistance));
         pressureSolver.Rebuild(cells.Count, CollectionsMarshal.AsSpan(pressureLinks), sizes, CollectionsMarshal.AsSpan(pressurePoints));
+        CacheGeometryWeights();
         ReconstructVelocity(); PublishViews();
     }
 
@@ -164,19 +166,39 @@ public sealed partial class AirField
         inverseSizes = new double[n]; transportScale = new double[n]; wallDecay = new double[n];
     }
 
+    private void CacheGeometryWeights()
+    {
+        // Areas/capacities change only with geometry. All momentum substeps and
+        // published diagnostic views reuse these identical averaging weights.
+        Array.Clear(weightX, 0, cells.Count); Array.Clear(weightY, 0, cells.Count);
+        Array.Clear(coarseCapacity); Array.Clear(viewAreaU); Array.Clear(viewAreaV);
+        foreach (var node in cells) coarseCapacity[node.Block] += node.Capacity;
+        for (int i = 0; i < Blocked.Length; i++) Blocked[i] = coarseCapacity[i] == 0;
+        foreach (var face in faces)
+        {
+            var weights = face.Y ? weightY : weightX;
+            if (face.A >= 0) weights[face.A] += face.Area;
+            if (face.B >= 0) weights[face.B] += face.Area;
+            if (face.View >= 0) (face.Y ? viewAreaV : viewAreaU)[face.View] += face.Area;
+        }
+    }
+
     private void ReconstructVelocity()
     {
         var nodes = CollectionsMarshal.AsSpan(cells);
-        Array.Clear(weightX, 0, nodes.Length); Array.Clear(weightY, 0, nodes.Length);
         foreach (ref var node in nodes) node.U = node.V = 0;
-        foreach (var face in faces)
+        foreach (var face in CollectionsMarshal.AsSpan(faces))
         {
-            for (int k = 0; k < 2; k++)
+            double weighted = face.Velocity * face.Area;
+            if (face.Y)
             {
-                int i = k == 0 ? face.A : face.B;
-                if (i < 0) continue;
-                if (face.Y) { nodes[i].V += face.Velocity * face.Area; weightY[i] += face.Area; }
-                else { nodes[i].U += face.Velocity * face.Area; weightX[i] += face.Area; }
+                if (face.A >= 0) nodes[face.A].V += weighted;
+                if (face.B >= 0) nodes[face.B].V += weighted;
+            }
+            else
+            {
+                if (face.A >= 0) nodes[face.A].U += weighted;
+                if (face.B >= 0) nodes[face.B].U += weighted;
             }
         }
         for (int i = 0; i < nodes.Length; i++)
@@ -188,14 +210,13 @@ public sealed partial class AirField
 
     private void PublishViews()
     {
-        Array.Clear(Heat); Array.Clear(coarseCapacity); Array.Clear(U); Array.Clear(V); Array.Clear(viewAreaU); Array.Clear(viewAreaV);
-        foreach (var node in cells) { Heat[node.Block] += node.Heat; coarseCapacity[node.Block] += node.Capacity; }
-        for (int i = 0; i < Blocked.Length; i++) Blocked[i] = coarseCapacity[i] == 0;
+        Array.Clear(Heat); Array.Clear(U); Array.Clear(V);
+        foreach (var node in cells) Heat[node.Block] += node.Heat;
         foreach (var face in faces)
         {
             if (face.View < 0) continue;
-            if (face.Y) { V[face.View] += face.Velocity * face.Area; viewAreaV[face.View] += face.Area; }
-            else { U[face.View] += face.Velocity * face.Area; viewAreaU[face.View] += face.Area; }
+            if (face.Y) V[face.View] += face.Velocity * face.Area;
+            else U[face.View] += face.Velocity * face.Area;
         }
         for (int i = 0; i < U.Length; i++) if (viewAreaU[i] > 0) U[i] /= viewAreaU[i];
         for (int i = 0; i < V.Length; i++) if (viewAreaV[i] > 0) V[i] /= viewAreaV[i];

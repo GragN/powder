@@ -57,6 +57,7 @@ public sealed class SandboxApp
         bool smoke = args.Contains("--smoke-test");
         int frames = ReadInt(args, "--frames", smoke ? 120 : 0);
         string? screenshot = ReadString(args, "--screenshot");
+        string? frameReport = ReadString(args, "--frame-report");
         scenePath = ReadString(args, "--scene") ?? (smoke
             ? Path.Combine(Path.GetTempPath(), $"powder-lab-smoke-{Guid.NewGuid()}.json") : WorldFile.DefaultPath);
         bool initialized = false;
@@ -88,6 +89,8 @@ public sealed class SandboxApp
             if (smoke && stats.Particles != 0)
                 throw new InvalidOperationException("Startup canvas must be empty.");
             int frame = 0;
+            long loopStarted = Stopwatch.GetTimestamp(), physicsTicks = 0, renderTicks = 0, drawTicks = 0;
+            long initialTick = world.Tick;
             while (!WindowShouldClose())
             {
                 Input();
@@ -100,16 +103,20 @@ public sealed class SandboxApp
                 {
                     world.Step(); accumulator -= World.FixedDelta; steps++;
                 }
+                if (frameReport is not null) physicsTicks += Stopwatch.GetTimestamp() - started;
                 if (steps > 0) physicsStepSeconds = .5 * physicsStepSeconds + .5 * Stopwatch.GetElapsedTime(started).TotalSeconds / steps;
                 if (frame % 15 == 0) stats = world.Statistics();
                 if (renderedWorld != world || renderedRevision != world.VisualRevision
                     || renderedThermal != thermal || renderedAtmosphere != world.AtmosphereEnabled)
                 {
+                    long renderStarted = frameReport is not null ? Stopwatch.GetTimestamp() : 0;
                     RenderPixels(); renderedWorld = world; renderedRevision = world.VisualRevision;
                     renderedThermal = thermal; renderedAtmosphere = world.AtmosphereEnabled;
+                    if (frameReport is not null) renderTicks += Stopwatch.GetTimestamp() - renderStarted;
                 }
                 if (smoke && frame == 0 && pixels.Any(c => !c.Equals(CanvasBackground)))
                     throw new InvalidOperationException("Startup canvas must have a plain background.");
+                long drawStarted = frameReport is not null ? Stopwatch.GetTimestamp() : 0;
                 BeginDrawing();
                 ClearBackground(Background);
                 Header();
@@ -119,6 +126,7 @@ public sealed class SandboxApp
                 if (help) HelpOverlay();
                 if (pendingAction is not null) ConfirmOverlay();
                 EndDrawing();
+                if (frameReport is not null) drawTicks += Stopwatch.GetTimestamp() - drawStarted;
                 frame++;
                 if (frames > 0 && frame >= frames)
                 {
@@ -137,10 +145,23 @@ public sealed class SandboxApp
                     {
                         if (!File.Exists(scenePath) || !thermal || !paused || tool != 0)
                             throw new InvalidOperationException("UI smoke actions did not complete.");
-                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear, fractional boiling, submerged vapor.");
+                        Console.WriteLine($"UI SMOKE PASS: {frame} frames; {world.Count} particles; empty startup, palette, painting, heat, erase, pause/step, thermal view, properties, save/load, clear, fractional boiling, submerged vapor, sub-boiling evaporation and vapor transparency.");
                     }
                     break;
                 }
+            }
+            if (frameReport is not null)
+            {
+                string full = Path.GetFullPath(frameReport);
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                File.WriteAllText(full, System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Frames = frame, PhysicsSteps = world.Tick - initialTick,
+                    ElapsedSeconds = Stopwatch.GetElapsedTime(loopStarted).TotalSeconds,
+                    PhysicsMilliseconds = physicsTicks * 1000.0 / Stopwatch.Frequency,
+                    RenderMilliseconds = renderTicks * 1000.0 / Stopwatch.Frequency,
+                    DrawAndWaitMilliseconds = drawTicks * 1000.0 / Stopwatch.Frequency
+                }));
             }
             return 0;
         }
@@ -486,10 +507,8 @@ public sealed class SandboxApp
                 continue;
             }
             if (thermal) { pixels[i] = HeatColor(p.Temperature); continue; }
-            Rgb rgb = Materials.Get(p.Element).Color;
-            float variation = .86f + p.Variation / 255f * .24f;
-            Color c = new((byte)Math.Clamp(rgb.R * variation, 0, 255),
-                (byte)Math.Clamp(rgb.G * variation, 0, 255), (byte)Math.Clamp(rgb.B * variation, 0, 255), (byte)255);
+            Rgb rgb = ParticleAppearance.VariedColor(p.Element, p.Variation);
+            Color c = new(rgb.R, rgb.G, rgb.B, (byte)255);
             if (p.Element is Element.Fire or Element.Lava)
             {
                 float flicker = (float)(.5 + .5 * Math.Sin(world.Tick * .22 + p.Variation));
@@ -497,19 +516,25 @@ public sealed class SandboxApp
                     ? new((byte)255, (byte)(115 + 115 * flicker), (byte)(30 + 80 * flicker), (byte)255)
                     : new((byte)245, (byte)(70 + 65 * flicker), (byte)32, (byte)255);
             }
-            else if (p.Temperature > 525)
+            else
             {
-                float glow = (float)Math.Clamp((p.Temperature - 525) / 1100, 0, .85);
-                c = Mix(c, new(255, 125, 54, 255), glow);
+                double temperature = p.Temperature;
+                if (temperature > 525)
+                {
+                    float glow = (float)Math.Clamp((temperature - 525) / 1100, 0, .85);
+                    c = Mix(c, new(255, 125, 54, 255), glow);
+                }
             }
-            pixels[i] = c;
+            pixels[i] = p.Element is Element.Steam or Element.Vapor
+                ? Mix(CanvasBackground, c, ParticleAppearance.VaporOpacity(p)) : c;
         }
         foreach (int i in world.BubbleLocations)
         {
             ref readonly var bubble = ref world.Bubbles[i];
             if (bubble.Element == Element.Empty) continue;
             Rgb c = Materials.Get(bubble.Element).Color;
-            pixels[i] = thermal ? HeatColor(bubble.Temperature) : new Color(c.R, c.G, c.B, (byte)255);
+            pixels[i] = thermal ? HeatColor(bubble.Temperature)
+                : Mix(pixels[i], new Color(c.R, c.G, c.B, (byte)255), ParticleAppearance.DispersedOpacity(bubble));
         }
         UpdateTexture(texture, pixels);
     }
@@ -702,6 +727,25 @@ public sealed class SandboxApp
             Press(Control.Save); Press(Control.Clear); ConfirmAction(); Press(Control.Load);
             if (!world.Bubbles.Any(p => p.Element == Element.Steam))
                 throw new InvalidOperationException("UI failed to restore submerged vapor.");
+        }
+        if (frame == 110)
+        {
+            world.Set(239, 130, Element.Glass, 90); world.Set(241, 130, Element.Glass, 90);
+            world.Set(240, 131, Element.Glass, 90); world.Set(240, 130, Element.Water, 90);
+            Press(Control.Step);
+            ref readonly var vapor = ref world.At(240, 129);
+            if (vapor.Element != Element.Steam || vapor.CondensationOffset <= 0 || vapor.Temperature >= 100)
+                throw new InvalidOperationException("Sub-boiling surface evaporation did not create cool vapor.");
+            bool previousThermal = thermal; thermal = false;
+            RenderPixels();
+            Color pixel = pixels[129 * GridWidth + 240];
+            Rgb opaque = ParticleAppearance.VariedColor(vapor.Element, vapor.Variation);
+            if (pixel.Equals(CanvasBackground) || pixel.Equals(new Color(opaque.R, opaque.G, opaque.B, (byte)255)))
+                throw new InvalidOperationException("Dilute vapor was invisible or fully opaque.");
+            thermal = previousThermal; RenderPixels();
+            Press(Control.Save); Press(Control.Load);
+            if (world.At(240, 129).CondensationOffset <= 0)
+                throw new InvalidOperationException("UI failed to restore dilute vapor.");
         }
     }
 }

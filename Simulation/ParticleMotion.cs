@@ -44,6 +44,7 @@ public sealed partial class World
         {
             bool horizontal = remainingX > 0 && (remainingY == 0 || timeX <= timeY);
             int xx = x + (horizontal ? sx : 0), yy = y + (horizontal ? 0 : sy);
+            if (state == MatterState.Liquid && TryCoalesceLiquid(i, xx, yy)) return;
             if (TryMove(i, xx, yy, rising: !horizontal && sy < 0))
             {
                 if (!Inside(xx, yy)) return;

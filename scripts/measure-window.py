@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--dotnet", default="dotnet")
     parser.add_argument("--scene", choices=["boiling", "air", "empty"], default="boiling")
     parser.add_argument("--frames", type=int, default=240)
+    parser.add_argument("--after-first", action="store_true", help="Reverse measurement order to check warmup bias")
     parser.add_argument("--output", type=Path, default=Path("artifacts/window-benchmark.json"))
     args = parser.parse_args()
     if args.frames <= 0:
@@ -31,7 +32,10 @@ def main():
             parser.error(f"DLL not found: {dll}")
     results = []
     environment = dict(os.environ, DOTNET_TieredCompilation="0")
-    for version, dll in [("before", args.before.resolve()), ("after", args.after.resolve())]:
+    versions = [("before", args.before.resolve()), ("after", args.after.resolve())]
+    if args.after_first:
+        versions.reverse()
+    for version, dll in versions:
         command = [args.dotnet, str(dll), "--frames", str(args.frames)]
         if args.scene != "empty":
             command += ["--boiling-demo" if args.scene == "boiling" else "--air-demo"]
@@ -55,6 +59,7 @@ def main():
         print(f"{version}: {result['FramesPerSecond']:.2f} frames/s including startup", flush=True)
     report = dict(FormatVersion=2, Platform=platform.platform(), Scene=args.scene,
                   Frames=args.frames, IncludesStartup=True, IncludesFinalScreenshot=True, TieredCompilation=False,
+                  AfterFirst=args.after_first,
                   Display=environment.get("DISPLAY"), SoftwareOpenGL=environment.get("LIBGL_ALWAYS_SOFTWARE"),
                   Measurements=results)
     args.output.parent.mkdir(parents=True, exist_ok=True)

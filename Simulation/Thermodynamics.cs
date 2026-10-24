@@ -8,6 +8,9 @@ public static class Thermodynamics
     public const double Vaporization = 2_256_000;
     public static double BoilingLiquid => Fusion + WaterHeat * 100;
     public static double BoilingGas => BoilingLiquid + Vaporization;
+    public static double WaterVaporEnthalpy(double temperature) => BoilingGas + SteamHeat * (temperature - 100);
+    public static double WaterSaturationTemperature(in Particle p) => p.Element == Element.Steam ? 100 - p.CondensationOffset : 100;
+    public static double WaterLiquidEnthalpy(double temperature) => Fusion + WaterHeat * temperature;
     private static double IceHeat => Materials.Get(Element.Ice).SpecificHeat;
     private static double WaterHeat => Materials.Get(Element.Water).SpecificHeat;
     private static double SteamHeat => Materials.Get(Element.Steam).SpecificHeat;
@@ -48,29 +51,43 @@ public static class Thermodynamics
     public static double EnergyAtTemperature(in Particle p, double t)
     {
         if (Materials.IsWater(p.Element))
-            return (p.Mass - p.DissolvedSalt) * SpecificEnthalpy(Element.Water, t)
+            return (p.Mass - p.DissolvedSalt) * (p.Element == Element.Steam && p.CondensationOffset > 0
+                    && t > WaterSaturationTemperature(p) ? WaterVaporEnthalpy(t) : SpecificEnthalpy(Element.Water, t))
                 + p.DissolvedSalt * SaltHeat * t;
         Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         return p.Mass * (p.EnthalpyOffset + SpecificEnthalpy(origin, t));
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public static double Temperature(in Particle p)
+    {
+        // Pure liquid water is the hot path in density, viscosity and conduction.
+        // Its sensible interval needs neither gas/salt coefficients nor phase tables.
+        if (p.Element == Element.Water && p.DissolvedSalt == 0)
+        {
+            double fusion = p.Mass * Fusion;
+            if (p.Energy >= fusion && p.Energy < p.Mass * BoilingLiquid)
+                return (p.Energy - fusion) / (p.Mass * WaterHeat);
+        }
+        return PhaseTemperature(p);
+    }
+
+    private static double PhaseTemperature(in Particle p)
     {
         if (p.Element == Element.Empty) return 20;
         if (Materials.IsWater(p.Element))
         {
             double waterMass = p.Mass - p.DissolvedSalt;
-            double iceCapacity = waterMass * IceHeat + p.DissolvedSalt * SaltHeat;
-            double liquidCapacity = waterMass * WaterHeat + p.DissolvedSalt * SaltHeat;
-            double gasCapacity = waterMass * SteamHeat + p.DissolvedSalt * SaltHeat;
+            if (p.Energy < 0) return p.Energy / (waterMass * IceHeat + p.DissolvedSalt * SaltHeat);
             double fusionEnd = waterMass * Fusion;
-            double boilStart = fusionEnd + liquidCapacity * 100;
-            double boilEnd = boilStart + waterMass * Vaporization;
-            if (p.Energy < 0) return p.Energy / iceCapacity;
             if (p.Energy < fusionEnd) return 0;
+            double liquidCapacity = waterMass * WaterHeat + p.DissolvedSalt * SaltHeat;
+            double saturation = WaterSaturationTemperature(p);
+            double boilStart = fusionEnd + liquidCapacity * saturation;
             if (p.Energy < boilStart) return (p.Energy - fusionEnd) / liquidCapacity;
-            if (p.Energy < boilEnd) return 100;
-            return 100 + (p.Energy - boilEnd) / gasCapacity;
+            double boilEnd = waterMass * WaterVaporEnthalpy(saturation) + p.DissolvedSalt * SaltHeat * saturation;
+            if (p.Energy < boilEnd) return saturation;
+            return saturation + (p.Energy - boilEnd) / (waterMass * SteamHeat + p.DissolvedSalt * SaltHeat);
         }
         Element origin = p.Element is Element.Lava or Element.Vapor ? p.MeltOrigin : p.Element;
         double h = p.Energy / p.Mass - p.EnthalpyOffset;
@@ -94,7 +111,16 @@ public static class Thermodynamics
         return h / cp;
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public static void ResolvePhase(ref Particle p)
+    {
+        if (p.Element == Element.Water && p.DissolvedSalt == 0
+            && p.Energy >= p.Mass * Fusion && p.Energy < p.Mass * BoilingLiquid)
+        { p.CondensationOffset = 0; return; }
+        ResolvePhaseBoundary(ref p);
+    }
+
+    private static void ResolvePhaseBoundary(ref Particle p)
     {
         Element before = p.Element;
         if (CanMelt(before) && p.Energy < p.Mass * (p.EnthalpyOffset + Materials.Get(before).SpecificHeat * MeltingPoint(before)))
@@ -128,14 +154,16 @@ public static class Thermodynamics
         {
             double waterMass = p.Mass - p.DissolvedSalt;
             double fusionEnd = waterMass * Fusion;
-            double boilStart = waterMass * BoilingLiquid + p.DissolvedSalt * SaltHeat * 100;
-            double boilEnd = boilStart + waterMass * Vaporization;
+            double saturation = WaterSaturationTemperature(p);
+            double boilStart = waterMass * WaterLiquidEnthalpy(saturation) + p.DissolvedSalt * SaltHeat * saturation;
+            double boilEnd = waterMass * WaterVaporEnthalpy(saturation) + p.DissolvedSalt * SaltHeat * saturation;
             // Keep the original whole-cell state inside a mixed-phase interval.
             // Cooling steam/water must release all latent heat before changing state.
             p.Element = p.Energy <= 0 ? Element.Ice
                 : p.Energy < fusionEnd ? before == Element.Ice ? Element.Ice : Element.Water
                 : p.Energy >= boilEnd ? Element.Steam
                 : p.Energy > boilStart && before == Element.Steam ? Element.Steam : Element.Water;
+            if (p.Element != Element.Steam) p.CondensationOffset = 0;
         }
         if (p.Element != before && Materials.Get(p.Element).State == MatterState.Solid)
         { p.VelocityX = p.VelocityY = 0; p.TravelX = p.Travel = 0; }
@@ -148,7 +176,9 @@ public static class Thermodynamics
         if (Materials.IsWater(p.Element))
         {
             double m = p.Mass - p.DissolvedSalt, salt = p.DissolvedSalt * SaltHeat;
-            double a = m * Fusion, b = a + (m * WaterHeat + salt) * 100, c = b + m * Vaporization;
+            double saturation = WaterSaturationTemperature(p);
+            double a = m * Fusion, b = a + (m * WaterHeat + salt) * saturation;
+            double c = m * WaterVaporEnthalpy(saturation) + salt * saturation;
             return SelectSegment(p.Energy, heating, 0, a, b, c,
                 m * IceHeat + salt, m * WaterHeat + salt, m * SteamHeat + salt);
         }
@@ -224,6 +254,11 @@ public static class Thermodynamics
     public static void Exchange(ref Particle a, ref Particle b, double seconds, double contactConductance = 0)
     {
         if (seconds <= 0 || a.Element == Element.Empty || b.Element == Element.Empty) return;
+        // Uniform regions have no thermal flux. Check their stored state before
+        // evaluating two phase curves, without using a temperature tolerance.
+        if (a.Energy == b.Energy && a.Mass == b.Mass && a.Element == b.Element
+            && a.MeltOrigin == b.MeltOrigin && a.DissolvedSalt == b.DissolvedSalt
+            && a.EnthalpyOffset == b.EnthalpyOffset && a.CondensationOffset == b.CondensationOffset) return;
         double difference = b.Temperature - a.Temperature;
         if (difference > 1e-10) ExchangeColdHot(ref a, ref b, seconds, contactConductance, difference);
         else if (difference < -1e-10) ExchangeColdHot(ref b, ref a, seconds, contactConductance, -difference);
