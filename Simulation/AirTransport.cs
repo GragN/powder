@@ -45,7 +45,11 @@ public sealed partial class AirField
             double ta = face.A >= 0 ? dv[face.A] : AmbientTemperature;
             double tb = face.B >= 0 ? dv[face.B] : AmbientTemperature;
             double t = face.BlendA * ta + (1 - face.BlendA) * tb;
-            faceBuoyancy[i] = dt * World.Gravity * ((AmbientTemperature + 273.15) / Math.Max(50, t + 273.15) - 1);
+            double ca = face.A >= 0 ? steamFraction[face.A] : 0;
+            double cb = face.B >= 0 ? steamFraction[face.B] : 0;
+            double vapor = face.BlendA * ca + (1 - face.BlendA) * cb;
+            faceBuoyancy[i] = dt * World.Gravity * ((AmbientTemperature + 273.15) / Math.Max(50, t + 273.15)
+                * (1 - (1 - SteamMolarRatio) * vapor) - 1);
         }
         for (int step = 0; step < steps; step++)
         {

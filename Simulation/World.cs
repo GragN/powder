@@ -181,7 +181,7 @@ public sealed partial class World
         if (AtmosphereEnabled)
         {
             Air.UpdateObstacles(this);
-            Air.Step(FixedDelta);
+            Air.Step(this, FixedDelta);
         }
         if (ProfileSteps) LastTimings = new(thermalMs, liquidMs, motionMs, bubblesMs + releaseMs,
             Stopwatch.GetElapsedTime(atmosphereStart).TotalMilliseconds);

@@ -10,7 +10,13 @@ public sealed partial class World
         bool gas = state is MatterState.Gas or MatterState.Flame;
         ref var p = ref Cells[i];
         double dx, dy;
-        if (gas && (AtmosphereEnabled || HasLiquidNeighbor(x, y)))
+        if (e == Element.Steam && AtmosphereEnabled && Air.VolumeIndexAtFine(x, y) >= 0)
+        {
+            // Air.Step exchanges momentum in both directions once per tick.
+            // Advect with that velocity instead of applying one-way drag again.
+            dx = p.VelocityX * FixedDelta; dy = p.VelocityY * FixedDelta;
+        }
+        else if (gas && (AtmosphereEnabled || HasLiquidNeighbor(x, y)))
         {
             // Gas markers are entrained by the carrier flow, rather than moving upward on a timer.
             var flow = BubbleVelocity(x, y, p);

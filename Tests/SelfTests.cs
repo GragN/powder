@@ -408,6 +408,7 @@ public static partial class SelfTests
             Check(a.Cells.SequenceEqual(b.Cells), "determinism lost");
         });
         RunAtmosphereTests();
+        RunSteamAirTests();
         RunAirPocketTests();
         RunFiniteVolumeAirTests();
         RunLiquidTests();

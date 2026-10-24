@@ -146,13 +146,23 @@ public sealed partial class AirField
     }
 
     public void Step(double seconds)
+        => StepAtmosphere(null, seconds);
+
+    public void Step(World world, double seconds)
+        => StepAtmosphere(world, seconds);
+
+    private void StepAtmosphere(World? world, double seconds)
     {
         LastTimings = default;
         if (!double.IsFinite(seconds) || seconds < 0) throw new ArgumentOutOfRangeException(nameof(seconds));
         ImportVelocityEdits();
-        Active = cells.Any(c => Math.Abs(c.Heat) > 1e-14) || faces.Any(f => Math.Abs(f.Velocity) > 1e-10);
+        bool steam = UpdateSteamContent(world);
+        Active = steam || cells.Any(c => Math.Abs(c.Heat) > 1e-14) || faces.Any(f => Math.Abs(f.Velocity) > 1e-10);
         if (!Active || seconds == 0) { DivergenceRms = MaximumDivergence = 0; return; }
         long started = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
+        // Drag samples the previous projected flow. Sampling provisional buoyancy
+        // before pressure balance would make uniform steam drift in a sealed room.
+        if (steam) CoupleSteamMomentum(world!, seconds);
         PredictMomentum(seconds);
         long pressureStart = ProfileSteps ? Stopwatch.GetTimestamp() : 0;
         Project(seconds);

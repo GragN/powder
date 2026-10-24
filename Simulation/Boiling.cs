@@ -244,12 +244,22 @@ public sealed partial class World
             if (parcel.Element == Element.Empty) continue;
             EvaporateDrop(index, ref parcel);
             if (parcel.Element == Element.Empty) continue;
-            var target = BubbleVelocity(x, y, parcel);
-            double decay = Math.Exp(-FixedDelta / target.Relaxation);
-            double dx = target.X * FixedDelta + (parcel.VelocityX - target.X) * target.Relaxation * (1 - decay);
-            double dy = target.Y * FixedDelta + (parcel.VelocityY - target.Y) * target.Relaxation * (1 - decay);
-            parcel.VelocityX = target.X + (parcel.VelocityX - target.X) * decay;
-            parcel.VelocityY = target.Y + (parcel.VelocityY - target.Y) * decay;
+            double dx, dy;
+            if (parcel.Element == Element.Steam && AtmosphereEnabled && Air.VolumeIndexAtFine(x, y) >= 0)
+            {
+                // The shared air solver handles two-way drag for airborne steam;
+                // retain the previous coupled velocity for this advection step.
+                dx = parcel.VelocityX * FixedDelta; dy = parcel.VelocityY * FixedDelta;
+            }
+            else
+            {
+                var target = BubbleVelocity(x, y, parcel);
+                double decay = Math.Exp(-FixedDelta / target.Relaxation);
+                dx = target.X * FixedDelta + (parcel.VelocityX - target.X) * target.Relaxation * (1 - decay);
+                dy = target.Y * FixedDelta + (parcel.VelocityY - target.Y) * target.Relaxation * (1 - decay);
+                parcel.VelocityX = target.X + (parcel.VelocityX - target.X) * decay;
+                parcel.VelocityY = target.Y + (parcel.VelocityY - target.Y) * decay;
+            }
             double tx = parcel.TravelX + dx, ty = parcel.Travel + dy;
             int sx = (int)Math.Truncate(tx), sy = (int)Math.Truncate(ty);
             parcel.TravelX = tx - sx; parcel.Travel = ty - sy;

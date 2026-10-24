@@ -102,6 +102,7 @@ public sealed partial class AirField
         foreach (var face in faces) pressureLinks.Add(new(face.A, face.B, face.Area * face.InverseDistance));
         pressureSolver.Rebuild(cells.Count, CollectionsMarshal.AsSpan(pressureLinks), sizes, CollectionsMarshal.AsSpan(pressurePoints));
         CacheGeometryWeights();
+        BuildSteamCoupling();
         ReconstructVelocity(); PublishViews();
     }
 
